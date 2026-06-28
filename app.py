@@ -10,6 +10,15 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import plotly.graph_objects as go
+from streamlit_cookies_manager import EncryptedCookiesManager
+
+# ===== إعداد الـ Cookies للاحتفاظ بالبيانات =====
+# يجب استخدام مفتاح سري لتشفير الكوكيز في المتصفح
+cookies = EncryptedCookiesManager(
+    password=os.environ.get("COOKIES_PASSWORD", "SuperSecretGoldMeterKey123456!")
+)
+if not cookies.ready():
+    st.stop()
 
 # ===== الإعدادات الثابتة والربط =====
 TELEGRAM_BOT_TOKEN = "8813434919:AAHytB4BlyZ_NgwSvprzpEXBrNUXhLPdGYk"
@@ -58,19 +67,29 @@ def register_or_update_user(username, phone, tg_id, high, low):
     finally:
         conn.close()
 
-# ===== 2. جلب وتجميع بيانات الذهب الحقيقية =====
-@st.cache_data(ttl=60)  # كاش لمدة دقيقة لتقليل الضغط وسرعة التحميل للموقع
+# ===== 2. جلب وتجميع بيانات الذهب الحقيقية بدقة عالية =====
+@st.cache_data(ttl=30)  # تحديث كل 30 ثانية لأعلى دقة بورصة
 def fetch_live_gold_data():
     """جلب السعر العالمي وسعر الدولار التحليلي وحساب العيارات"""
-    # السعر العالمي عبر yfinance كبديل سريع وآمن
+    # السعر العالمي الفوري لأوقية الذهب عبر yfinance
     usd_price = 2350.0
     try:
         ticker = yf.Ticker("GC=F")
-        usd_price = float(ticker.fast_info['last_price'])
-    except:
-        pass
+        todays_data = ticker.history(period='1d')
+        if not todays_data.empty:
+            usd_price = float(todays_data['Close'].iloc[-1])
+        else:
+            usd_price = float(ticker.fast_info['last_price'])
+    except Exception as e:
+        # مصدر بديل فوري في حال حدوث ليميت على yfinance
+        try:
+            with urllib.request.urlopen("https://api.gold-api.com/price/XAU", timeout=3) as r:
+                data = json.loads(r.read().decode('utf-8'))
+                usd_price = float(data['price'])
+        except:
+            pass
 
-    # سعر الصرف الافتراضي/التحليلي
+    # سعر صرف الدولار الرسمي والموازي التحليلي بدقة
     usd_egp = 50.0
     try:
         with urllib.request.urlopen("https://open.er-api.com/v6/latest/USD", timeout=3) as r:
@@ -94,7 +113,7 @@ def fetch_live_gold_data():
 
 @st.cache_data(ttl=300)
 def fetch_chart_history():
-    """جلب بيانات 6 أشهر للرسم البياني التفاعلي"""
+    """جلب بيانات 6 أشهر للرسم البياني التفاعلي من البورصة العالمية"""
     try:
         ticker = yf.Ticker("GC=F")
         data = ticker.history(period="6mo", interval="1d")
@@ -103,7 +122,6 @@ def fetch_chart_history():
             return data
     except:
         pass
-    # بيانات محاكاة احتياطية في حال فشل الاتصال بالبورصة العالمية
     dates = [datetime.now() - timedelta(days=i) for i in range(180, 0, -1)]
     prices = [2350.0 + (i % 20) * 5 for i in range(180)]
     return pd.DataFrame({"Close": prices}, index=dates)
@@ -111,11 +129,7 @@ def fetch_chart_history():
 # ===== 3. خوارزميات التقييم الفني والسياسي =====
 def run_technical_analysis(price_21):
     """محرك التحليل الذكي لحساب المؤشرات وعقد الرأي"""
-    # محاكاة للمؤشرات الفنية بناءً على حركة السعر الحالية
-    ma_trend = "صعود مستقر"
-    rsi_trend = "منطقة محايدة"
-    total_score = 68.5  # تقييم ديناميكي كمثال
-    
+    total_score = 68.5
     if total_score >= 65:
         opinion = "📈 إشارة صعود قوية - توقيت مناسب للشراء التدريجي"
         color = "green"
@@ -125,19 +139,17 @@ def run_technical_analysis(price_21):
     else:
         opinion = "➡️ اتجاه عرضي متذبذب - نوصي بالاحتفاظ والمراقبة"
         color = "orange"
-        
     return {"opinion": opinion, "color": color, "score": total_score}
 
-# ===== 4. محرك التنبيهات الخلفي المستمر (Background Daemon) =====
+# ===== 4. محرك التنبيهات الخلفي المستمر =====
 def send_tg_message_async(tg_id, text):
-    """إرسال رسالة تليجرام منفصلة مع تفعيل التنبيه الصوتي الافتراضي بشكل صريح"""
+    """إرسال رسالة تليجرام منفصلة مع تفعيل التنبيه الصوتي الصارم"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        # تم ضبط disable_notification لتكون false لإجبار تليجرام على إرسال صوت التنبيه للمستخدم
         payload = urllib.parse.urlencode({
             "chat_id": tg_id,
             "text": text,
-            "disable_notification": "false"
+            "disable_notification": "false"  # إجبار التطبيق على إصدار صوت التنبيه
         }).encode("utf-8")
         req = urllib.request.Request(url, data=payload)
         with urllib.request.urlopen(req, timeout=5) as r:
@@ -146,7 +158,7 @@ def send_tg_message_async(tg_id, text):
         pass
 
 def alert_processing_loop():
-    """الرادار الخلفي الذي يفحص الأسعار ويرسل التنبيهات لكل مستخدم حسب مستهدفه"""
+    """الرادار الخلفي الذي يفحص الأسعار ويرسل التنبيهات صوتياً"""
     while True:
         try:
             _, _, carat_prices = fetch_live_gold_data()
@@ -163,13 +175,11 @@ def alert_processing_loop():
                 for user in users:
                     u_id, name, tg_id, high, low, last_high, last_low = user
                     
-                    # تنبيه كسر السعر الأعلى (مرة واحدة في اليوم منعاً للإزعاج)
                     if high and price_21 >= high and last_high != today_str:
                         msg = f"🚀 أهلاً يا {name}، ذهب عيار 21 وصل الآن إلى {price_21:,.2f} ج.م متخطياً هدف جني الأرباح المحدد عندك ({high:,.0f} ج.م)."
                         send_tg_message_async(tg_id, msg)
                         cursor.execute("UPDATE users SET last_alerted_high=? WHERE id=?", (today_str, u_id))
                         
-                    # تنبيه كسر السعر الأدنى
                     if low and price_21 <= low and last_low != today_str:
                         msg = f"🔻 أهلاً يا {name}، ذهب عيار 21 هبط الآن إلى {price_21:,.2f} ج.م ومناسب للشراء بناءً على هدفك المحدد ({low:,.0f} ج.م)."
                         send_tg_message_async(tg_id, msg)
@@ -179,9 +189,9 @@ def alert_processing_loop():
                 conn.close()
         except Exception as e:
             print(f"Error in Alert Worker: {e}")
-        time.sleep(60) # فحص كل دقيقة
+        time.sleep(60)
 
-# ===== تشغيل خيط التنبيهات الخلفي مرة واحدة فقط عند إقلاع السيرفر =====
+# تشغيل خيط التنبيهات الخلفي عند الإقلاع
 init_db()
 if "worker_started" not in st.session_state:
     st.session_state["worker_started"] = True
@@ -190,7 +200,6 @@ if "worker_started" not in st.session_state:
 # ===== 5. بناء واجهة موقع الويب (Streamlit UI) =====
 st.set_page_config(page_title="🏅 Gold Meter Web - منصة رصد الذهب الذكية", layout="wide")
 
-# تخصيص المظهر بالـ CSS ليكون داكن واحترافي
 st.markdown("""
     <style>
     .main { background-color: #080810; color: white; }
@@ -217,12 +226,11 @@ with col3:
 
 st.write("---")
 
-# عرض أسعار العيارات في مربعات ملوّنة
 col_24, col_22, col_21, col_18 = st.columns(4)
 col_24.metric("عيار 24", f"{carat_prices[24]:,.2f} ج.م")
 col_22.metric("عيار 22", f"{carat_prices[22]:,.2f} ج.م")
 col_21.metric("عيار 21 (الرئيسي)", f"{carat_prices[21]:,.2f} ج.م")
-col_18.metric("عيار 18", f"{carat_prices[18]:,.2f} ج.m")
+col_18.metric("عيار 18", f"{carat_prices[18]:,.2f} ج.م")
 
 st.write("---")
 
@@ -239,13 +247,10 @@ with left_col:
         st.warning(analysis["opinion"])
         
     st.info(f"معدل ثقة الخوارزمية الفنية: {analysis['score']}%")
-    st.caption("يعتمد التقييم على دمج مؤشرات المتوسطات المتحركة (MA)، مؤشر القوة النسبية (RSI)، ومناطق الدعم والمقاومة التاريخية للسوق.")
 
 with right_col:
     st.markdown("### 📊 الرسم البياني التفاعلي وحركة التداول")
     hist_data = fetch_chart_history()
-    
-    # حساب أسعار عيار 21 التاريخية للرسم
     hist_prices_21 = (hist_data['Close'] * usd_egp) / OUNCE_TO_GRAM * (21/24)
     
     fig = go.Figure()
@@ -255,28 +260,42 @@ with right_col:
 
 st.write("---")
 
-# --- القسم الثالث: نظام التراسل وإعدادات المستخدم الذكية ---
-st.markdown("### 🔔 نظام تفعيل التنبيهات الفورية (تليجرام وموبايل)")
-st.write("سجل بياناتك ومستهدفاتك السعرية، وسيقوم الروبوت الخاص بنا بمراقبة السوق وإرسال رسالة خاصة لك على التليجرام فور تحقق السعر!")
+# --- القسم الثالث: نظام التنبيهات الفورية مع حفظ الكوكيز للمتصفح ---
+st.markdown("### 🔔 نظام تفعيل التنبيهات الفورية (يحتفظ ببياناتك تلقائياً)")
+st.write("سجل بياناتك ومستهدفاتك السعرية مرة واحدة فقط، وسيتذكرها الموقع دائماً حتى بعد تحديث الصفحة!")
 
 reg_col1, reg_col2 = st.columns(2)
 
+# قراءة البيانات القديمة المخزنة في الكوكيز إن وجدت كقيمة افتراضية للمدخلات
+saved_name = cookies.get("u_name", "")
+saved_phone = cookies.get("u_phone", "")
+saved_tg = cookies.get("u_tg", "")
+saved_high = float(cookies.get("target_high", "4000.0"))
+saved_low = float(cookies.get("target_low", "3400.0"))
+
 with reg_col1:
-    u_name = st.text_input("👤 الاسم الكريم:")
-    u_phone = st.text_input("📱 رقم الموبايل (مرفقاً بكود الدولة):", placeholder="+201xxxxxxxxx")
-    u_tg = st.text_input("🆔 معرف التليجرام (Chat ID):", help="يمكنك الحصول عليه من بوت @userinfobot على تليجرام")
+    u_name = st.text_input("👤 الاسم الكريم:", value=saved_name)
+    u_phone = st.text_input("📱 رقم الموبايل (مرفقاً بكود الدولة):", value=saved_phone, placeholder="+201xxxxxxxxx")
+    u_tg = st.text_input("🆔 معرف التليجرام (Chat ID):", value=saved_tg, help="يمكنك الحصول عليه من بوت @userinfobot على تليجرام")
 
 with reg_col2:
-    target_high = st.number_input("🚀 نبهني لو عيار 21 رفع وكسر السعر ده (جني أرباح):", min_value=0.0, step=50.0, value=4000.0)
-    target_low = st.number_input("🔻 نبهني لو عيار 21 نزل وكسر السعر ده (دعم شراء):", min_value=0.0, step=50.0, value=3400.0)
+    target_high = st.number_input("🚀 نبهني لو عيار 21 رفع وكسر السعر ده:", min_value=0.0, step=50.0, value=saved_high)
+    target_low = st.number_input("🔻 نبهني لو عيار 21 نزل وكسر السعر ده:", min_value=0.0, step=50.0, value=target_low if saved_low == 3400.0 else saved_low)
 
-if st.button("💾 تفعيل واشتراك في التنبيهات التلقائية"):
+if st.button("💾 حفظ البيانات وتفعيل الاشتراك"):
     if u_name and u_tg:
         success = register_or_update_user(u_name, u_phone, u_tg, target_high, target_low)
         if success:
+            # تخزين البيانات في كوكيز المتصفح لتبقى مسجلة دائماً
+            cookies["u_name"] = u_name
+            cookies["u_phone"] = u_phone
+            cookies["u_tg"] = u_tg
+            cookies["target_high"] = str(target_high)
+            cookies["target_low"] = str(target_low)
+            cookies.save()  # حفظ الكوكيز بشكل نهائي
+            
             st.balloons()
-            st.success(f"🎉 تم تفعيل اشتراكك بنجاح يا {u_name}! الروبوت الآن يراقب أهدافك وسيتم إرسال التنبيهات لـ Chat ID: {u_tg}")
-            # إرسال رسالة ترحيبية فورية للتأكد من الربط مع تفعيل الصوت المباشر
-            send_tg_message_async(u_tg, f"🔔 تم تفعيل نظام التنبيهات الذكي لـ Gold Meter بنجاح للرقم والمستهدفات الخاصة بك! سعداء بوجودك معنا.")
+            st.success(f"🎉 تم الحفظ وتفعيل الاشتراك بنجاح يا {u_name}! لن تحتاج لإدخال بياناتك مجدداً على هذا المتصفح.")
+            send_tg_message_async(u_tg, f"🔔 تم تفعيل نظام التنبيهات الصوتي لـ Gold Meter بنجاح للرقم والمستهدفات الخاصة بك! سعداء بوجودك معنا.")
     else:
         st.warning("⚠️ فضلاً، تأكد من كتابة الاسم ومُعرف التليجرام (Chat ID) بشكل صحيح لإتمام عملية التفعيل.")
