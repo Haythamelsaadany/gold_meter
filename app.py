@@ -192,7 +192,7 @@ st.markdown("""
     div.stButton > button:first-child { background-color: #00b894; color: black; font-weight: bold; width: 100%; }
     .price-card { background-color: #121224; padding: 20px; border-radius: 12px; border: 1px solid #1f1f3a; text-align: center; }
     </style>
-""", unsafe_type=True)
+""", unsafe_allow_html=True)
 
 st.title("🏅 Gold Meter - لوحة تحليل الذهب التفاعلية للمستثمرين")
 st.subheader("رصد لحظي للبورصة العالمية والسوق المحلي مع نظام تنبيهات ذكي")
