@@ -202,15 +202,14 @@ usd_price, usd_egp, carat_prices = fetch_live_gold_data()
 analysis = run_technical_analysis(carat_prices[21])
 
 # --- القسم الأول: شاشات الأسعار اللحظية ---
+# --- القسم الأول: شاشات الأسعار اللحظية ---
 col1, col2, col3 = st.columns(3)
 with col1:
-    st.markdown(f"<div class='price-card'><h4 style='color:#00d4ff;'>🌍 أوقية الذهب عالمياً</h4><h2>${usd_price:,.2f}</h2></div>", unsafe_type=True)
+    st.markdown(f"<div class='price-card'><h4 style='color:#00d4ff;'>🌍 أوقية الذهب عالمياً</h4><h2>${usd_price:,.2f}</h2></div>", unsafe_allow_html=True)
 with col2:
-    st.markdown(f"<div class='price-card'><h4 style='color:#fdcb6e;'>💵 الدولار تحليلياً</h4><h2>{usd_egp:.2f} ج.م</h2></div>", unsafe_type=True)
+    st.markdown(f"<div class='price-card'><h4 style='color:#fdcb6e;'>💵 الدولار تحليلياً</h4><h2>{usd_egp:.2f} ج.م</h2></div>", unsafe_allow_html=True)
 with col3:
-    st.markdown(f"<div class='price-card'><h4 style='color:#00d4ff;'>🏅 الأوقية محلياً</h4><h2>{usd_price * usd_egp:,.2f} ج.م</h2></div>", unsafe_type=True)
-
-st.write("---")
+    st.markdown(f"<div class='price-card'><h4 style='color:#00d4ff;'>🏅 الأوقية محلياً</h4><h2>{usd_price * usd_egp:,.2f} ج.م</h2></div>", unsafe_allow_html=True)st.write("---")
 
 # عرض أسعار العيارات في مربعات ملوّنة
 col_24, col_22, col_21, col_18 = st.columns(4)
