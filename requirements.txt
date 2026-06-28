@@ -2,4 +2,3 @@ streamlit
 pandas
 yfinance
 plotly
-streamlit-cookies-manager
