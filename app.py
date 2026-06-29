@@ -1,6 +1,5 @@
 import os
 import time
-import threading
 import sqlite3
 import json
 import urllib.request
@@ -15,15 +14,10 @@ TELEGRAM_BOT_TOKEN = "8813434919:AAHytB4BlyZ_NgwSvprzpEXBrNUXhLPdGYk"
 OUNCE_TO_GRAM = 31.1034768
 DB_FILE = "users_gold_alerts.db"
 
-# قفل أمان على مستوى السيرفر بالكامل لمنع تكرار الـ Threads نهائياً عند عمل Refresh
-if not hasattr(st, "_scheduler_initialized"):
-    st._scheduler_initialized = False
-
-# ===== 1. إدارة قاعدة البيانات المحدثة وعلاج خطأ العمود المفقود =====
+# ===== 1. إدارة قاعدة البيانات وعلاج عمود التفعيل =====
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
-    # إنشاء الجدول الأساسي إن لم يكن موجوداً
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -39,21 +33,18 @@ def init_db():
     ''')
     conn.commit()
     
-    # حل مشكلة الصورة الأخيرة: التحقق من وجود عمود alert_enabled وإضافته فوراً لو مفقود
+    # التأكد من وجود العمود لتجنب خطأ الصورة السابقة
     try:
         cursor.execute("SELECT alert_enabled FROM users LIMIT 1")
     except sqlite3.OperationalError:
         cursor.execute("ALTER TABLE users ADD COLUMN alert_enabled INTEGER DEFAULT 1")
         conn.commit()
-        print("💡 تم إضافة عمود alert_enabled المفقود بنجاح لواجهة الداتابيز")
-        
     conn.close()
 
 def register_or_update_user(username, phone, tg_id, high, low):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     try:
-        # استخدام دالة INSERT OR REPLACE أو ON CONFLICT القياسية لضمان الاستقرار التام
         cursor.execute('''
             INSERT INTO users (username, phone, telegram_id, high_target, low_target, last_alerted_high, last_alerted_low, alert_enabled)
             VALUES (?, ?, ?, ?, ?, NULL, NULL, 1)
@@ -69,7 +60,7 @@ def register_or_update_user(username, phone, tg_id, high, low):
         conn.commit()
         return True
     except Exception as e:
-        st.error(f"خطأ في حفظ البيانات في الجدول: {e}")
+        st.error(f"خطأ في حفظ البيانات: {e}")
         return False
     finally:
         conn.close()
@@ -131,7 +122,25 @@ def fetch_live_gold_data():
     }
     return usd_price, usd_egp, carat_prices
 
-# ===== 3. محرك الفحص والإرسال الصارم للفترات اللحظية =====
+# ===== 3. حساب نسبة الثقة وتقديم التوصيات الذكية =====
+def calculate_algorithm_confidence(price_21, usd_price, usd_egp):
+    fair_price_21 = ((usd_price * usd_egp) / OUNCE_TO_GRAM) * (21.0 / 24.0)
+    deviation = (price_21 - fair_price_21) / fair_price_21
+    confidence = 100.0 - (abs(deviation) * 100.0 * 2)
+    confidence = max(min(confidence, 99.4), 40.0)
+    
+    if deviation > 0.05:
+        opinion = f"⚠️ التوصية الحالية: السعر الحالي ({price_21:,.2f} ج.م) أعلى من قيمته العادلة المبنية على البنوك الرسمية ({fair_price_21:,.2f} ج.م) بفارق واضح. نوصي بالحذر والتريث في الشراء وعمل جني أرباح جزئي إذا تحقق هدفك الفني."
+        color = "red"
+    elif deviation < -0.05:
+        opinion = f"🔥 التوصية الحالية: السعر الحالي أقل من القيمة العادلة المحسوبة بنسبة واضحة! فرصة شراء ممتازة للمستثمرين على المدى المتوسط والطويل."
+        color = "blue"
+    else:
+        opinion = f"➡️ التوصية الحالية: السعر متوافق تماماً ومستقر مع القيمة العادلة المباشرة لمتوسط البنوك الرسمي ({fair_price_21:,.2f} ج.م). مستويات آمنة وطبيعية للتداول بناءً على العرض والطلب الحقيقي."
+        color = "green"
+    return round(confidence, 1), opinion, color
+
+# ===== 4. محرك الفحص الصارم والخالي تماماً من تداخل الـ Threads =====
 def send_tg_message(tg_id, text):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -142,7 +151,7 @@ def send_tg_message(tg_id, text):
     except:
         return False
 
-def check_and_send_alerts():
+def check_and_send_alerts_safely(price_21):
     try:
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
@@ -150,10 +159,7 @@ def check_and_send_alerts():
         users = cursor.fetchall()
         conn.close()
         
-        if not users: return "لا يوجد مستخدمين نشطين حالياً"
-        
-        _, _, carat_prices = fetch_live_gold_data()
-        price_21 = round(float(carat_prices.get(21, 0)), 2)
+        if not users: return
         today_str = datetime.now().strftime('%Y-%m-%d')
         
         for user in users:
@@ -163,7 +169,7 @@ def check_and_send_alerts():
             val_high = float(high)
             val_low = float(low)
             
-            # شرط رياضي صارم مبني على الداتابيز يمنع العشوائية تماماً
+            # فحص دقيق وشروط حاسمة تمنع الأرقام العشوائية تماماً
             if price_21 >= val_high and last_high != today_str:
                 msg = f"🚀 تنبيه اختراق الهدف الأعلى:\nيا {name}، سعر جرام عيار 21 الحالي وصل {price_21:,.2f} ج.م متخطياً هدفك المحدد ({val_high:,.0f} ج.م)."
                 if send_tg_message(tg_id, msg):
@@ -181,36 +187,15 @@ def check_and_send_alerts():
                     cursor.execute("UPDATE users SET last_alerted_low=? WHERE id=?", (today_str, u_id))
                     conn.commit()
                     conn.close()
-        return f"تم الفحص بنجاح. السعر الحالي لعيار 21 هو: {price_21} ج.م"
     except Exception as e:
-        return f"خطأ في محرك الفحص الخلفي: {e}"
+        print(f"Alert execution error: {e}")
 
-# ===== 4. الحماية القصوى للمجدول ومنع تكرار الـ Threads العشوائية =====
-def start_stable_scheduler():
-    if not st._scheduler_initialized:
-        # فحص وجود أي Thread قديم يحمل نفس الاسم لمنع تراكم العمليات في الذاكرة
-        current_threads = [t.name for t in threading.enumerate()]
-        if "GoldSchedulerThread" not in current_threads:
-            def scheduler_loop():
-                while True:
-                    try:
-                        check_and_send_alerts()
-                    except:
-                        pass
-                    time.sleep(30) # فحص مستقر وآمن كل 30 ثانية
-            
-            thread = threading.Thread(target=scheduler_loop, name="GoldSchedulerThread", daemon=True)
-            thread.start()
-        st._scheduler_initialized = True
-
-# تهيئة قاعدة البيانات وتشغيل الرادار الأحادي المستقر
+# تهيئة قاعدة البيانات
 init_db()
-start_stable_scheduler()
 
-# ===== 5. واجهة المستخدم الرسومية الفاخرة =====
-st.set_page_config(page_title="🏅 Gold Meter - النظام الذكي المطور", layout="wide")
+# ===== 5. واجهة المستخدم الرسومية =====
+st.set_page_config(page_title="🏅 Gold Meter - لوحة التوصيات والتنبيهات المتقدمة", layout="wide")
 
-# تصحيح الـ CSS ومنع انهيار التنسيق النصي الخاطئ المعروض في الصور
 st.markdown("""
     <style>
     .main { background-color: #06060c; color: white; }
@@ -220,24 +205,24 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 st.title("🏅 Gold Meter - لوحة تحليل الذهب التفاعلية للمستثمرين")
-st.write("رصد لحظي للبورصة العالمية والسوق المحلي مع نظام تنبيهات محمي ومصلح بالكامل.")
+st.write("رصد لحظي للبورصة العالمية والسوق المحلي مدعوم بنظام توصيات الخوارزمية الفنية.")
 
 usd_price, usd_egp, carat_prices = fetch_live_gold_data()
 current_price = carat_prices[21]
 ounce_local_fair = usd_price * usd_egp
 
-# عرض مؤشرات الأسعار بشكل آمن تماماً يمنع الـ Syntax Error
+# تشغيل الفحص الفوري والمباشر مع التحميل دون الحاجة لـ Background Thread ميت
+check_and_send_alerts_safely(current_price)
+
+# عرض مؤشرات الأسعار الفورية الآمنة
 col1, col2, col3 = st.columns(3)
-with col1:
-    st.markdown(f"<div class='price-card'><h4 style='color:#00d4ff;'>🌍 أوقية الذهب عالمياً</h4><h2>${usd_price:,.2f}</h2></div>", unsafe_allow_html=True)
-with col2:
-    st.markdown(f"<div class='price-card'><h4 style='color:#fdcb6e;'>💵 سعر الدولار بالبنوك</h4><h2>{usd_egp:.2f} ج.م</h2></div>", unsafe_allow_html=True)
-with col3:
-    st.markdown(f"<div class='price-card'><h4 style='color:#00b894;'>🏅 الأوقية محلياً (عادلة)</h4><h2>{ounce_local_fair:,.2f} ج.م</h2></div>", unsafe_allow_html=True)
+with col1: st.markdown(f"<div class='price-card'><h4 style='color:#00d4ff;'>🌍 أوقية الذهب عالمياً</h4><h2>${usd_price:,.2f}</h2></div>", unsafe_allow_html=True)
+with col2: st.markdown(f"<div class='price-card'><h4 style='color:#fdcb6e;'>💵 سعر الدولار بالبنوك</h4><h2>{usd_egp:.2f} ج.م</h2></div>", unsafe_allow_html=True)
+with col3: st.markdown(f"<div class='price-card'><h4 style='color:#00b894;'>🏅 الأوقية محلياً (عادلة)</h4><h2>{ounce_local_fair:,.2f} ج.م</h2></div>", unsafe_allow_html=True)
 
 st.write("---")
 
-# عرض تفاصيل الأعيرة بمقاييس Streamlit القياسية الآمنة
+# عرض شاشات الـ Metrics للأعيرة
 c24, c22, c21, c18 = st.columns(4)
 c24.metric("عيار 24 (الحقيقي العادل)", f"{carat_prices[24]:,.2f} ج.م")
 c22.metric("عيار 22", f"{carat_prices[22]:,.2f} ج.م")
@@ -246,7 +231,21 @@ c18.metric("عيار 18", f"{carat_prices[18]:,.2f} ج.م")
 
 st.write("---")
 
-# لوحة تحكم وإدخال الأهداف والتنبيهات المحدثة
+# ===== قسم التوصيات الفنية الذكية المطلوبة =====
+st.markdown("### 🧠 تقرير التوصيات الفنية ونسبة الموثوقية الحالية")
+confidence, op_text, op_color = calculate_algorithm_confidence(current_price, usd_price, usd_egp)
+
+if op_color == "red":
+    st.error(op_text)
+elif op_color == "blue":
+    st.info(op_text)
+else:
+    st.success(op_text)
+st.markdown(f"📊 **نسبة موثوقية السعر ومطابقته الفنية الحالية:** `{confidence}%`")
+
+st.write("---")
+
+# لوحة التحكم وإدخال الأهداف
 st.markdown("### 🔔 نظام تفعيل التنبيهات الفورية الذكي")
 reg_col1, reg_col2 = st.columns(2)
 
@@ -278,7 +277,7 @@ with reg_col2:
     st.write("")
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
-        # زر الحفظ مع إرجاع البلالين والاحتفال الجميل! 🎉🎈
+        # زر الحفظ والاحتفال المبهج! 🎉🎈
         if st.button("💾 تفعيل الاشتراك وحفظ الإعدادات"):
             if u_name and u_tg:
                 if register_or_update_user(u_name, u_phone, u_tg, target_high, target_low):
@@ -288,22 +287,21 @@ with reg_col2:
                     st.session_state["target_high"] = float(target_high)
                     st.session_state["target_low"] = float(target_low)
                     
-                    # البلالين والاحتفال اللذيذ عادوا للعمل بقوة هنا!
+                    # البلالين والاحتفال الذي تفضله!
                     st.balloons()
-                    st.success(f"🎉 تم تفعيل اشتراكك بنجاح يا هندسة! أهدافك الحالية الحالية هي {target_low} و {target_high}.")
-                    time.sleep(1)
+                    st.success(f"🎉 تم تفعيل اشتراكك بنجاح وحفظ أهدافك الجديدة: {target_low} و {target_high}.")
+                    time.sleep(1.2)
                     st.rerun()
             else:
-                st.error("⚠️ يرجى كتابة الاسم ومعرف التليجرام أولاً لحفظ البيانات بشكل سليم!")
+                st.error("⚠️ يرجى كتابة الاسم ومعرف التليجرام أولاً!")
                 
     with col_btn2:
         if st.button("🔄 إعادة تعيين وتصفير التنبيهات"):
             reset_all_alerts()
-            st.warning("🔄 تم تصفير سجل الإرسال اليومي للتنبيهات لجميع المستخدمين بنجاح.")
+            st.warning("🔄 تم تصفير سجل الإرسال اليومي بنجاح.")
 
-# استعراض البيانات المسجلة بالكامل للتأكد من نجاح الإدخال
 st.write("---")
-if st.button("📋 استعراض جدول مراقبة الأهداف النشطة בסيرفر"):
+if st.button("📋 استعراض جدول مراقبة الأهداف النشطة في السيرفر"):
     conn = sqlite3.connect(DB_FILE)
     df = pd.read_sql_query("SELECT username AS [الاسم], telegram_id AS [التليجرام], high_target AS [الحد الأعلى], low_target AS [الحد الأدنى], alert_enabled AS [حالة التفعيل] FROM users", conn)
     conn.close()
