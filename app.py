@@ -69,27 +69,50 @@ def get_user_by_tg(tg_id):
     conn.close()
     return row
 
-# ===== 2. جلب وتجميع بيانات الذهب الحقيقية بدقة عالية من البورصة =====
-@st.cache_data(ttl=30)  # تحديث فوري كل 30 ثانية لأعلى دقة بورصة عالمية ومحلية
+# ===== 2. جلب وتجميع بيانات الذهب الفورية (Gold Spot) بأعلى دقة =====
+@st.cache_data(ttl=20)  # كاش 20 ثانية فقط لتحديث فوري دقيق جداً
 def fetch_live_gold_data():
-    """جلب السعر العالمي وسعر الدولار التحليلي وحساب العيارات بالملي"""
-    usd_price = 2350.0
+    """جلب السعر الفوري العالمي للذهب (XAU Spot) وسعر الدولار بدقة البورصة"""
+    usd_price = 0.0
+    
+    # المحاولة الأولى: الـ API العالمي للسعر الفوري (Gold Spot) لضمان عدم وجود فروقات عقود آجلة
     try:
-        ticker = yf.Ticker("GC=F")
-        todays_data = ticker.history(period='1d')
-        if not todays_data.empty:
-            usd_price = float(todays_data['Close'].iloc[-1])
-        else:
-            usd_price = float(ticker.fast_info['last_price'])
-    except:
-        try:
-            # دقة بديلة فورية ومباشرة من الـ API العالمي للذهب في حال حدوث ضغط
-            with urllib.request.urlopen("https://api.gold-api.com/price/XAU", timeout=3) as r:
-                data = json.loads(r.read().decode('utf-8'))
+        req = urllib.request.Request(
+            "https://api.gold-api.com/price/XAU", 
+            headers={'User-Agent': 'Mozilla/5.0'}
+        )
+        with urllib.request.urlopen(req, timeout=4) as r:
+            data = json.loads(r.read().decode('utf-8'))
+            if data and 'price' in data:
                 usd_price = float(data['price'])
+    except:
+        pass
+
+    # المحاولة الثانية (Backup): إذا فشل الـ API الأول، نجلب السعر الفوري من موقع بديل
+    if usd_price == 0.0:
+        try:
+            with urllib.request.urlopen("https://open.er-api.com/v6/latest/USD", timeout=3) as r:
+                data = json.loads(r.read().decode('utf-8'))
+                # بعض الـ APIs بتوفر الـ XAU جوه سلة العملات كـ Spot Price
+                if 'rates' in data and 'XAU' in data['rates']:
+                    # السعر بيكون 1 أوقية مقسومة على الرقم، فنقلبها عشان نجيب الدولار لكل أوقية
+                    usd_price = 1.0 / float(data['rates']['XAU'])
         except:
             pass
 
+    # المحاولة الثالثة والأخيرة (Backup 2): لو كل الجهات علقت، نرجع لـ yfinance كملاذ أخير
+    if usd_price == 0.0:
+        try:
+            ticker = yf.Ticker("GC=F")
+            todays_data = ticker.history(period='1d')
+            if not todays_data.empty:
+                usd_price = float(todays_data['Close'].iloc[-1])
+            else:
+                usd_price = float(ticker.fast_info['last_price'])
+        except:
+            usd_price = 2350.0  # سعر افتراضي آمن جداً في حال انقطاع الإنترنت بالكامل
+
+    # جلب سعر صرف الدولار التحليلي المحدث لحظياً
     usd_egp = 50.0
     try:
         with urllib.request.urlopen("https://open.er-api.com/v6/latest/USD", timeout=3) as r:
@@ -113,7 +136,7 @@ def fetch_live_gold_data():
 
 @st.cache_data(ttl=300)
 def fetch_chart_history():
-    """جلب بيانات 6 أشهر للرسم البياني التفاعلي بدقة تامة"""
+    """جلب بيانات 6 أشهر للرسم البياني التفاعلي"""
     try:
         ticker = yf.Ticker("GC=F")
         data = ticker.history(period="6mo", interval="1d")
@@ -158,7 +181,7 @@ def send_tg_message_async(tg_id, text):
         pass
 
 def alert_processing_loop():
-    """الرادار الخلفي الذي يفحص الأسعار ويرسل التنبيهات صوتياً"""
+    """الرادار الخلفي الذي يفحص الأسعار الفورية ويرسل التنبيهات صوتياً"""
     while True:
         try:
             _, _, carat_prices = fetch_live_gold_data()
@@ -218,7 +241,7 @@ analysis = run_technical_analysis(carat_prices[21])
 # --- القسم الأول: شاشات الأسعار اللحظية ---
 col1, col2, col3 = st.columns(3)
 with col1:
-    st.markdown(f"<div class='price-card'><h4 style='color:#00d4ff;'>🌍 أوقية الذهب عالمياً</h4><h2>${usd_price:,.2f}</h2></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='price-card'><h4 style='color:#00d4ff;'>🌍 أوقية الذهب عالمياً (فوري)</h4><h2>${usd_price:,.2f}</h2></div>", unsafe_allow_html=True)
 with col2:
     st.markdown(f"<div class='price-card'><h4 style='color:#fdcb6e;'>💵 الدولار تحليلياً</h4><h2>{usd_egp:.2f} ج.م</h2></div>", unsafe_allow_html=True)
 with col3:
@@ -260,13 +283,12 @@ with right_col:
 
 st.write("---")
 
-# --- القسم الثالث: نظام التنبيهات الذكي المعتمد على الـ Database لملء البيانات تلقائياً ---
+# --- القسم الثالث: نظام التنبيهات الذكي ---
 st.markdown("### 🔔 نظام تفعيل التنبيهات الفورية الذكي")
 st.write("بمجرد إدخال معرف التليجرام الخاص بك، سيقوم النظام بالتعرف عليك واستدعاء بياناتك وأهدافك تلقائياً دون إعادتها مع كل ريفريش!")
 
 reg_col1, reg_col2 = st.columns(2)
 
-# استخدام الـ State لتهيئة البيانات الافتراضية
 if "u_tg" not in st.session_state: st.session_state["u_tg"] = ""
 if "u_name" not in st.session_state: st.session_state["u_name"] = ""
 if "u_phone" not in st.session_state: st.session_state["u_phone"] = ""
@@ -274,10 +296,8 @@ if "target_high" not in st.session_state: st.session_state["target_high"] = 4000
 if "target_low" not in st.session_state: st.session_state["target_low"] = 3400.0
 
 with reg_col1:
-    # حقل الـ Telegram ID هو المفتاح.. بمجرد كتابته والضغط على Enter يستدعي كل الداتا
     u_tg = st.text_input("🆔 معرف التليجرام (Chat ID):", value=st.session_state["u_tg"], help="اكتب معرفك هنا واضغط Enter لاسترجاع بياناتك المخزنة")
     
-    # التحقق الفوري والربط بقاعدة البيانات إذا كان مسجلاً سابقاً
     if u_tg != st.session_state["u_tg"]:
         user_data = get_user_by_tg(u_tg)
         if user_data:
@@ -286,10 +306,10 @@ with reg_col1:
             st.session_state["u_phone"] = user_data[1]
             st.session_state["target_high"] = user_data[2]
             st.session_state["target_low"] = user_data[3]
-            st.rerun() # إعادة تحميل سريع لوضع البيانات الجديدة في الخانات
+            st.rerun()
 
     u_name = st.text_input("👤 الاسم الكريم:", value=st.session_state["u_name"])
-    u_phone = st.text_input("📱 رقم الموبايل (اختياري):", value=st.session_state["u_phone"], placeholder="+201xxxxxxxxx")
+    u_phone = st.text_input("📱 رقم الموبايل (مرفقاً بكود الدولة):", value=st.session_state["u_phone"], placeholder="+201xxxxxxxxx")
 
 with reg_col2:
     target_high = st.number_input("🚀 نبهني لو عيار 21 رفع وكسر السعر ده (جني أرباح):", min_value=0.0, step=50.0, value=st.session_state["target_high"])
@@ -299,7 +319,6 @@ if st.button("💾 تفعيل الاشتراك وحفظ الإعدادات"):
     if u_name and u_tg:
         success = register_or_update_user(u_name, u_phone, u_tg, target_high, target_low)
         if success:
-            # حفظ القيم في الـ State الحالي للمتصفح
             st.session_state["u_tg"] = u_tg
             st.session_state["u_name"] = u_name
             st.session_state["u_phone"] = u_phone
