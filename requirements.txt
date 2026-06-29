@@ -3,3 +3,4 @@ pandas
 yfinance
 plotly
 feedparser
+psycopg2-binary
