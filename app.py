@@ -8,13 +8,18 @@ from datetime import datetime
 import streamlit as st
 import pandas as pd
 import yfinance as yf
+import plotly.express as px
+import feedparser
+
+# ===== الإعدادات الأساسية للواجهة (يجب أن تكون في البداية) =====
+st.set_page_config(page_title="🏅 Gold Meter - المساعد المالي الذكي", layout="wide")
 
 # ===== الإعدادات الثابتة =====
 TELEGRAM_BOT_TOKEN = "8813434919:AAHytB4BlyZ_NgwSvprzpEXBrNUXhLPdGYk"
 OUNCE_TO_GRAM = 31.1034768
 DB_FILE = "users_gold_alerts.db"
 
-# ===== 1. إدارة قاعدة البيانات وعلاج عمود التفعيل =====
+# ===== 1. إدارة قاعدة البيانات =====
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -80,7 +85,7 @@ def reset_all_alerts():
     conn.commit()
     conn.close()
 
-# ===== 2. جلب البيانات الاستقراري عالي الدقة =====
+# ===== 2. جلب البيانات اللحظية =====
 @st.cache_data(ttl=15)
 def fetch_live_gold_data():
     usd_price = 0.0
@@ -121,7 +126,39 @@ def fetch_live_gold_data():
     }
     return usd_price, usd_egp, carat_prices
 
-# ===== 3. حساب نسبة الثقة وتقديم التوصيات الذكية =====
+# ===== 3. جلب البيانات التاريخية للرسم البياني =====
+@st.cache_data(ttl=3600) # تحديث كل ساعة لتخفيف الضغط
+def get_gold_history():
+    try:
+        ticker = yf.Ticker("GC=F")
+        hist = ticker.history(period="1mo")
+        if not hist.empty:
+            df = hist[['Close']].reset_index()
+            # إزالة التوقيت من التاريخ ليكون أوضح في الرسم البياني
+            df['Date'] = df['Date'].dt.date
+            df.columns = ['Date', 'Price']
+            return df
+    except Exception as e:
+        return None
+
+# ===== 4. جلب الأخبار الاقتصادية =====
+@st.cache_data(ttl=1800) # تحديث كل نصف ساعة
+def fetch_economy_news():
+    try:
+        # رابط RSS كمثال (يمكنك تغييره لأي مصدر أخباري تفضله)
+        rss_url = "https://www.cnbcarabia.com/rss" 
+        feed = feedparser.parse(rss_url)
+        news_list = []
+        for entry in feed.entries[:6]: # جلب آخر 6 أخبار
+            news_list.append({
+                "title": entry.title,
+                "link": entry.link
+            })
+        return news_list
+    except:
+        return []
+
+# ===== 5. خوارزمية التوصيات الفنية الذكية =====
 def calculate_algorithm_confidence(price_21, usd_price, usd_egp):
     fair_price_21 = ((usd_price * usd_egp) / OUNCE_TO_GRAM) * (21.0 / 24.0)
     deviation = (price_21 - fair_price_21) / fair_price_21
@@ -129,17 +166,17 @@ def calculate_algorithm_confidence(price_21, usd_price, usd_egp):
     confidence = max(min(confidence, 99.4), 40.0)
     
     if deviation > 0.05:
-        opinion = f"⚠️ التوصية الحالية: السعر الحالي ({price_21:,.2f} ج.م) أعلى من قيمته العادلة المبنية على البنوك الرسمية ({fair_price_21:,.2f} ج.م) بفارق واضح. نوصي بالحذر والتريث في الشراء."
+        opinion = f"⚠️ **تحذير شراء:** السعر الحالي ({price_21:,.2f} ج.م) أعلى من قيمته العادلة المباشرة بفارق واضح. التوصية: التريث للمضاربين."
         color = "red"
     elif deviation < -0.05:
-        opinion = f"🔥 التوصية الحالية: السعر الحالي أقل من القيمة العادلة المحسوبة بنسبة واضحة! فرصة شراء ممتازة."
+        opinion = f"🔥 **فرصة شراء:** السعر الحالي أقل من القيمة العادلة بشكل ملحوظ! فرصة جيدة للتجميع والادخار."
         color = "blue"
     else:
-        opinion = f"➡️ التوصية الحالية: السعر متوافق تماماً ومستقر مع القيمة العادلة المباشرة لمتوسط البنوك الرسمي ({fair_price_21:,.2f} ج.م)."
+        opinion = f"➡️ **استقرار السوق:** السعر الحالي متوافق تماماً مع القيمة العادلة المباشرة ({fair_price_21:,.2f} ج.م). الشراء بغرض الادخار طويل الأجل آمن."
         color = "green"
     return round(confidence, 1), opinion, color
 
-# ===== 4. محرك الفحص الآمن واللحظي =====
+# ===== 6. محرك الفحص الآمن واللحظي (تليجرام) =====
 def send_tg_message(tg_id, text):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -195,54 +232,93 @@ def check_and_send_alerts_safely(price_21):
     except Exception as e:
         return f"خطأ: {e}"
 
+# تجهيز قاعدة البيانات
 init_db()
 
-# ===== 5. واجهة المستخدم =====
-st.set_page_config(page_title="🏅 Gold Meter - لوحة التوصيات", layout="wide")
-
+# ===== 7. واجهة المستخدم (تنسيق مطور) =====
 st.markdown("""
     <style>
     .main { background-color: #06060c; color: white; }
     .price-card { background-color: #0f0f1e; padding: 20px; border-radius: 12px; border: 1px solid #1e1e38; text-align: center; margin-bottom: 15px; }
     div.stButton > button:first-child { background-color: #e1b12c; color: black; font-weight: bold; width: 100%; border-radius: 8px; border: none; }
+    .news-box { background-color: #1a1a2e; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-right: 4px solid #e1b12c; }
+    .news-box a { color: #f1c40f; text-decoration: none; font-weight: bold; }
+    .news-box a:hover { color: #ffffff; text-decoration: underline; }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🏅 Gold Meter - لوحة تحليل الذهب والتوصيات")
+st.title("🏅 Gold Meter - لوحة تحليل الذهب المتكاملة")
 
+# جلب البيانات
 usd_price, usd_egp, carat_prices = fetch_live_gold_data()
 current_price = carat_prices[21]
 ounce_local_fair = usd_price * usd_egp
 
-# عرض مؤشرات الأسعار
+# --- قسم 1: المؤشرات المباشرة ---
 col1, col2, col3 = st.columns(3)
 with col1: st.markdown(f"<div class='price-card'><h4 style='color:#00d4ff;'>🌍 أوقية الذهب عالمياً</h4><h2>${usd_price:,.2f}</h2></div>", unsafe_allow_html=True)
-with col2: st.markdown(f"<div class='price-card'><h4 style='color:#fdcb6e;'>💵 سعر الدولار بالبنوك</h4><h2>{usd_egp:.2f} ج.م</h2></div>", unsafe_allow_html=True)
+with col2: st.markdown(f"<div class='price-card'><h4 style='color:#fdcb6e;'>💵 سعر الصرف التقديري</h4><h2>{usd_egp:.2f} ج.م</h2></div>", unsafe_allow_html=True)
 with col3: st.markdown(f"<div class='price-card'><h4 style='color:#00b894;'>🏅 الأوقية محلياً (عادلة)</h4><h2>{ounce_local_fair:,.2f} ج.م</h2></div>", unsafe_allow_html=True)
 
 st.write("---")
 
+# --- قسم 2: أسعار الجرامات والمشغولات ---
 c24, c22, c21, c18 = st.columns(4)
 c24.metric("عيار 24", f"{carat_prices[24]:,.2f} ج.م")
 c22.metric("عيار 22", f"{carat_prices[22]:,.2f} ج.م")
-c21.metric("عيار 21 (الحالي)", f"{current_price:,.2f} ج.m")
+c21.metric("عيار 21 (السوق)", f"{current_price:,.2f} ج.م", delta="الأكثر شعبية")
 c18.metric("عيار 18", f"{carat_prices[18]:,.2f} ج.م")
 
-st.write("---")
-
-# ===== قسم التوصيات الفنية الذكية =====
-st.markdown("### 🧠 تقرير التوصيات الفنية ونسبة الموثوقية")
-confidence, op_text, op_color = calculate_algorithm_confidence(current_price, usd_price, usd_egp)
-
-if op_color == "red": st.error(op_text)
-elif op_color == "blue": st.info(op_text)
-else: st.success(op_text)
-st.markdown(f"📊 **نسبة مطابقة السعر الفنية:** `{confidence}%`")
+# أسعار السبائك والعملات
+st.markdown("**🪙 أسعار السبائك والعملات الذهبية (بدون مصنعية):**")
+sub1, sub2, sub3, sub4 = st.columns(4)
+sub1.metric("جنيه ذهب (8 جرام عيار 21)", f"{current_price * 8:,.2f} ج.م")
+sub2.metric("سبيكة 5 جرام (عيار 24)", f"{carat_prices[24] * 5:,.2f} ج.م")
+sub3.metric("سبيكة 10 جرام", f"{carat_prices[24] * 10:,.2f} ج.م")
+sub4.metric("سبيكة 50 جرام", f"{carat_prices[24] * 50:,.2f} ج.م")
 
 st.write("---")
 
-# لوحة الأهداف وفحص يدوي آمن
-st.markdown("### 🔔 نظام الأهداف والتحكم")
+# --- قسم 3: الرسوم البيانية والأخبار ---
+chart_col, news_col = st.columns([2, 1]) # تقسيم الشاشة: ثلثين للرسم البياني وثلث للأخبار
+
+with chart_col:
+    st.markdown("### 📊 الاتجاه العام عالمياً (آخر 30 يوم)")
+    df_hist = get_gold_history()
+    if df_hist is not None:
+        fig = px.line(df_hist, x='Date', y='Price', 
+                      labels={'Price': 'سعر الأوقية ($)', 'Date': 'التاريخ'})
+        fig.update_traces(line_color='#e1b12c', line_width=3)
+        fig.update_layout(plot_bgcolor='#06060c', paper_bgcolor='#06060c', font_color='white')
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.warning("تعذر جلب البيانات التاريخية في الوقت الحالي.")
+
+    # التوصية الفنية أسفل الرسم البياني
+    st.markdown("### 🧠 التحليل المالي والتوصية")
+    confidence, op_text, op_color = calculate_algorithm_confidence(current_price, usd_price, usd_egp)
+    if op_color == "red": st.error(op_text)
+    elif op_color == "blue": st.info(op_text)
+    else: st.success(op_text)
+    st.markdown(f"📊 **مؤشر استقرار السوق:** `{confidence}%`")
+
+with news_col:
+    st.markdown("### 📰 آخر الأخبار الاقتصادية")
+    news_items = fetch_economy_news()
+    if news_items:
+        for item in news_items:
+            st.markdown(f"""
+                <div class='news-box'>
+                    <a href="{item['link']}" target="_blank">{item['title']}</a>
+                </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.write("لم نتمكن من جلب الأخبار الآن. جرب لاحقاً.")
+
+st.write("---")
+
+# --- قسم 4: نظام التنبيهات وإدارة حسابات المستخدمين ---
+st.markdown("### 🔔 نظام التنبيهات الآلية عبر تليجرام")
 reg_col1, reg_col2 = st.columns(2)
 
 if "u_tg" not in st.session_state: st.session_state["u_tg"] = ""
@@ -267,8 +343,8 @@ with reg_col1:
     u_phone = st.text_input("📱 رقم الهاتف:", value=st.session_state["u_phone"])
 
 with reg_col2:
-    target_high = st.number_input("🚀 هدف أعلى (جني أرباح):", value=float(st.session_state["target_high"]), step=50.0)
-    target_low = st.number_input("🔻 هدف أدنى (شراء):", value=float(st.session_state["target_low"]), step=50.0)
+    target_high = st.number_input("🚀 هدف أعلى لبيع الذهب (جني أرباح):", value=float(st.session_state["target_high"]), step=50.0)
+    target_low = st.number_input("🔻 هدف أدنى لشراء الذهب (تجميع):", value=float(st.session_state["target_low"]), step=50.0)
     
     st.write("")
     col_btn1, col_btn2 = st.columns(2)
@@ -281,19 +357,19 @@ with reg_col2:
                     st.session_state["u_phone"] = u_phone
                     st.session_state["target_high"] = float(target_high)
                     st.session_state["target_low"] = float(target_low)
-                    st.balloons() # البلالين المبهجة عند الحفظ الناجح
-                    st.success("🎉 تم حفظ أهدافك بنجاح!")
+                    st.balloons()
+                    st.success("🎉 تم حفظ أهدافك بنجاح! سيتم إشعارك تلقائياً عند وصول السعر.")
                     time.sleep(1)
                     st.rerun()
             else:
                 st.error("⚠️ يرجى إدخال الاسم والـ Chat ID")
                 
     with col_btn2:
-        if st.button("🔄 فحص التنبيهات وإرسال يدوي الآن"):
+        if st.button("🔄 فحص وإرسال التنبيهات للمستخدمين"):
             report = check_and_send_alerts_safely(current_price)
             st.info(report)
 
 st.write("---")
-if st.button("🔄 تصفير سجل الإرسال"):
+if st.button("🔄 تصفير سجل الإرسال لجميع المستخدمين"):
     reset_all_alerts()
-    st.success("تم تصفير السجل بنجاح.")
+    st.success("تم تصفير السجل بنجاح، النظام مستعد لإرسال التنبيهات من جديد.")
