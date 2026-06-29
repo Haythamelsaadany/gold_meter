@@ -8,26 +8,17 @@ import plotly.express as px
 import feedparser
 import time
 
-# إعدادات الواجهة
+# إعداد الصفحة
 st.set_page_config(page_title="Gold Meter 2026", layout="wide", page_icon="🏅")
 
 # ==========================================
-# 1. الاتصال بقاعدة البيانات (المحدث)
+# 1. دالة الاتصال (الطريقة الأكثر استقراراً)
 # ==========================================
 def get_db_connection():
-    try:
-        config = st.secrets["postgres"]
-        return psycopg2.connect(
-            host=config["host"],
-            port=config["port"],
-            database=config["database"],
-            user=config["user"],
-            password=config["password"],
-            connect_timeout=10
-        )
-    except Exception as e:
-        st.error(f"خطأ في الاتصال بقاعدة البيانات: {e}")
-        st.stop()
+    # تأكد في الـ Secrets أنك وضعت DATABASE_URL بالكامل
+    # الرابط يجب أن يكون: postgresql://postgres:[password]@db.zufalogivvjkejxewvnb.supabase.co:5432/postgres
+    db_url = st.secrets["DATABASE_URL"]
+    return psycopg2.connect(db_url, sslmode='require')
 
 def init_db():
     try:
@@ -38,47 +29,40 @@ def init_db():
             username TEXT, 
             tg_id TEXT UNIQUE, 
             high NUMERIC, 
-            low NUMERIC, 
-            enabled INT DEFAULT 1)''')
+            low NUMERIC)''')
         conn.commit()
         cur.close()
         conn.close()
     except Exception as e:
-        st.error(f"خطأ في تهيئة القاعدة: {e}")
+        st.error(f"خطأ في قاعدة البيانات: {e}")
 
 # ==========================================
 # 2. جلب البيانات (الأسعار والأخبار)
 # ==========================================
 @st.cache_data(ttl=300)
 def fetch_data():
-    # السعر العالمي
     usd_price = 2330.0
     try:
-        with urllib.request.urlopen("https://api.gold-api.com/price/XAU", timeout=3) as r:
+        with urllib.request.urlopen("https://api.gold-api.com/price/XAU", timeout=5) as r:
             usd_price = float(json.load(r)['price'])
     except: pass
-    
-    # سعر الدولار
     usd_egp = 49.22
     try:
-        with urllib.request.urlopen("https://open.er-api.com/v6/latest/USD", timeout=3) as r:
+        with urllib.request.urlopen("https://open.er-api.com/v6/latest/USD", timeout=5) as r:
             usd_egp = float(json.load(r)['rates']['EGP'])
     except: pass
-    
     return usd_price, usd_egp
 
 # ==========================================
-# 3. الواجهة الرئيسية (التطبيق)
+# 3. الواجهة الرئيسية
 # ==========================================
 def main():
-    init_db()
     st.title("🏅 Gold Meter - لوحة تحليل الذهب المتكاملة")
     
     usd, egp = fetch_data()
     ounce_to_gram = 31.1034768
     gram21 = ((usd * egp) / ounce_to_gram) * (21/24)
     
-    # أعمدة الأسعار
     c1, c2, c3 = st.columns(3)
     c1.metric("أوقية عالمي", f"${usd:,.2f}")
     c2.metric("سعر الدولار", f"{egp:.2f} ج.م")
@@ -86,28 +70,24 @@ def main():
     
     st.divider()
     
-    # الأقسام
-    tab1, tab2, tab3 = st.tabs(["📊 التحليل التاريخي", "📰 الأخبار الاقتصادية", "🔔 التنبيهات"])
+    tab1, tab2, tab3 = st.tabs(["📊 التحليل", "📰 الأخبار", "🔔 التنبيهات"])
     
     with tab1:
-        st.subheader("الاتجاه العالمي (آخر شهر)")
         hist = yf.Ticker("GC=F").history(period="1mo")
         st.line_chart(hist['Close'])
         
     with tab2:
-        st.subheader("أهم العناوين")
         feed = feedparser.parse("https://www.cnbcarabia.com/rss")
         for entry in feed.entries[:5]:
             st.write(f"🔹 [{entry.title}]({entry.link})")
             
     with tab3:
-        st.subheader("إعداد تنبيهات Telegram")
         name = st.text_input("الاسم")
         tg_id = st.text_input("Chat ID")
-        h = st.number_input("هدف البيع (جني الأرباح)", value=6000.0)
-        l = st.number_input("هدف الشراء (التجميع)", value=5000.0)
+        h = st.number_input("هدف البيع", value=6000.0)
+        l = st.number_input("هدف الشراء", value=5000.0)
         
-        if st.button("حفظ الأهداف"):
+        if st.button("حفظ الإعدادات"):
             try:
                 conn = get_db_connection()
                 cur = conn.cursor()
@@ -115,11 +95,12 @@ def main():
                 conn.commit()
                 cur.close()
                 conn.close()
-                st.success("تم حفظ إعداداتك بنجاح!")
+                st.success("تم الحفظ!")
             except Exception as e:
-                st.error("حدث خطأ أثناء الحفظ")
+                st.error(f"خطأ أثناء الحفظ: {e}")
 
     st.markdown("<hr><div style='text-align:center'>© Techno logic 2026. Haytham Elsaadany</div>", unsafe_allow_html=True)
 
 if __name__ == "__main__":
+    init_db()
     main()
