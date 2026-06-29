@@ -4,3 +4,5 @@ yfinance
 plotly
 feedparser
 psycopg2-binary
+sqlalchemy
+psycopg2-binary
