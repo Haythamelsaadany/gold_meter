@@ -1,6 +1,5 @@
 import os
 import time
-import sqlite3
 import json
 import urllib.request
 import urllib.parse
@@ -10,53 +9,52 @@ import pandas as pd
 import yfinance as yf
 import plotly.express as px
 import feedparser
+import psycopg2
 
-# ===== الإعدادات الأساسية للواجهة (يجب أن تكون في البداية) =====
+# ===== الإعدادات الأساسية للواجهة =====
 st.set_page_config(page_title="🏅 Gold Meter - المساعد المالي الذكي", layout="wide")
 
 # ===== الإعدادات الثابتة =====
 TELEGRAM_BOT_TOKEN = "8813434919:AAHytB4BlyZ_NgwSvprzpEXBrNUXhLPdGYk"
 OUNCE_TO_GRAM = 31.1034768
-DB_FILE = "users_gold_alerts.db"
 
-# ===== 1. إدارة قاعدة البيانات =====
+# ===== 1. إدارة قاعدة البيانات السحابية (Supabase / PostgreSQL) =====
+@st.cache_resource
+def get_db_connection():
+    # جلب رابط الاتصال من إعدادات الأمان في Streamlit Secrets
+    return psycopg2.connect(st.secrets["DATABASE_URL"])
+
 def init_db():
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT,
-            phone TEXT,
-            telegram_id TEXT UNIQUE,
-            high_target REAL,
-            low_target REAL,
-            last_alerted_high TEXT,
-            last_alerted_low TEXT,
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(255),
+            phone VARCHAR(50),
+            telegram_id VARCHAR(100) UNIQUE,
+            high_target NUMERIC,
+            low_target NUMERIC,
+            last_alerted_high VARCHAR(50),
+            last_alerted_low VARCHAR(50),
             alert_enabled INTEGER DEFAULT 1
         )
     ''')
     conn.commit()
-    
-    try:
-        cursor.execute("SELECT alert_enabled FROM users LIMIT 1")
-    except sqlite3.OperationalError:
-        cursor.execute("ALTER TABLE users ADD COLUMN alert_enabled INTEGER DEFAULT 1")
-        conn.commit()
-    conn.close()
+    cursor.close()
 
 def register_or_update_user(username, phone, tg_id, high, low):
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
     try:
         cursor.execute('''
             INSERT INTO users (username, phone, telegram_id, high_target, low_target, last_alerted_high, last_alerted_low, alert_enabled)
-            VALUES (?, ?, ?, ?, ?, NULL, NULL, 1)
-            ON CONFLICT(telegram_id) DO UPDATE SET
-                username=excluded.username,
-                phone=excluded.phone,
-                high_target=excluded.high_target,
-                low_target=excluded.low_target,
+            VALUES (%s, %s, %s, %s, %s, NULL, NULL, 1)
+            ON CONFLICT (telegram_id) DO UPDATE SET
+                username=EXCLUDED.username,
+                phone=EXCLUDED.phone,
+                high_target=EXCLUDED.high_target,
+                low_target=EXCLUDED.low_target,
                 last_alerted_high=NULL,
                 last_alerted_low=NULL,
                 alert_enabled=1
@@ -65,25 +63,26 @@ def register_or_update_user(username, phone, tg_id, high, low):
         return True
     except Exception as e:
         st.error(f"خطأ في حفظ البيانات: {e}")
+        conn.rollback()
         return False
     finally:
-        conn.close()
+        cursor.close()
 
 def get_user_by_tg(tg_id):
     if not tg_id: return None
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT username, phone, high_target, low_target FROM users WHERE telegram_id=?", (tg_id,))
+    cursor.execute("SELECT username, phone, high_target, low_target FROM users WHERE telegram_id=%s", (tg_id,))
     row = cursor.fetchone()
-    conn.close()
+    cursor.close()
     return row
 
 def reset_all_alerts():
-    conn = sqlite3.connect(DB_FILE)
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET last_alerted_high=NULL, last_alerted_low=NULL")
     conn.commit()
-    conn.close()
+    cursor.close()
 
 # ===== 2. جلب البيانات اللحظية =====
 @st.cache_data(ttl=15)
@@ -127,14 +126,13 @@ def fetch_live_gold_data():
     return usd_price, usd_egp, carat_prices
 
 # ===== 3. جلب البيانات التاريخية للرسم البياني =====
-@st.cache_data(ttl=3600) # تحديث كل ساعة لتخفيف الضغط
+@st.cache_data(ttl=3600)
 def get_gold_history():
     try:
         ticker = yf.Ticker("GC=F")
         hist = ticker.history(period="1mo")
         if not hist.empty:
             df = hist[['Close']].reset_index()
-            # إزالة التوقيت من التاريخ ليكون أوضح في الرسم البياني
             df['Date'] = df['Date'].dt.date
             df.columns = ['Date', 'Price']
             return df
@@ -142,18 +140,14 @@ def get_gold_history():
         return None
 
 # ===== 4. جلب الأخبار الاقتصادية =====
-@st.cache_data(ttl=1800) # تحديث كل نصف ساعة
+@st.cache_data(ttl=1800)
 def fetch_economy_news():
     try:
-        # رابط RSS كمثال (يمكنك تغييره لأي مصدر أخباري تفضله)
         rss_url = "https://www.cnbcarabia.com/rss" 
         feed = feedparser.parse(rss_url)
         news_list = []
-        for entry in feed.entries[:6]: # جلب آخر 6 أخبار
-            news_list.append({
-                "title": entry.title,
-                "link": entry.link
-            })
+        for entry in feed.entries[:6]:
+            news_list.append({"title": entry.title, "link": entry.link})
         return news_list
     except:
         return []
@@ -189,11 +183,10 @@ def send_tg_message(tg_id, text):
 
 def check_and_send_alerts_safely(price_21):
     try:
-        conn = sqlite3.connect(DB_FILE)
+        conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute("SELECT id, username, telegram_id, high_target, low_target, last_alerted_high, last_alerted_low FROM users WHERE alert_enabled = 1")
         users = cursor.fetchall()
-        conn.close()
         
         if not users: return "لا يوجد مستخدمين نشطين"
         today_str = datetime.now().strftime('%Y-%m-%d')
@@ -209,25 +202,19 @@ def check_and_send_alerts_safely(price_21):
             if price_21 >= val_high and last_high != today_str:
                 msg = f"🚀 تنبيه اختراق الهدف الأعلى:\nيا {name}، سعر جرام عيار 21 الحالي وصل {price_21:,.2f} ج.م متخطياً هدفك ({val_high:,.0f} ج.م)."
                 if send_tg_message(tg_id, msg):
-                    conn = sqlite3.connect(DB_FILE)
-                    cursor = conn.cursor()
-                    cursor.execute("UPDATE users SET last_alerted_high=? WHERE id=?", (today_str, u_id))
+                    cursor.execute("UPDATE users SET last_alerted_high=%s WHERE id=%s", (today_str, u_id))
                     conn.commit()
-                    conn.close()
                     status_report.append(f"تم إرسال تنبيه صعود لـ {name}")
                     
             if price_21 <= val_low and last_low != today_str:
                 msg = f"🔻 تنبيه كسر القاع الأدنى:\nيا {name}، سعر جرام عيار 21 هبط الآن إلى {price_21:,.2f} ج.م متخطياً هدفك ({val_low:,.0f} ج.م)."
                 if send_tg_message(tg_id, msg):
-                    conn = sqlite3.connect(DB_FILE)
-                    cursor = conn.cursor()
-                    cursor.execute("UPDATE users SET last_alerted_low=? WHERE id=?", (today_str, u_id))
+                    cursor.execute("UPDATE users SET last_alerted_low=%s WHERE id=%s", (today_str, u_id))
                     conn.commit()
-                    conn.close()
                     status_report.append(f"تم إرسال تنبيه هبوط لـ {name}")
         
-        if status_report:
-            return ", ".join(status_report)
+        cursor.close()
+        if status_report: return ", ".join(status_report)
         return "السعر في النطاق الآمن لأهدافك الحالية"
     except Exception as e:
         return f"خطأ: {e}"
@@ -235,7 +222,7 @@ def check_and_send_alerts_safely(price_21):
 # تجهيز قاعدة البيانات
 init_db()
 
-# ===== 7. واجهة المستخدم (تنسيق مطور) =====
+# ===== 7. واجهة المستخدم =====
 st.markdown("""
     <style>
     .main { background-color: #06060c; color: white; }
@@ -244,12 +231,12 @@ st.markdown("""
     .news-box { background-color: #1a1a2e; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-right: 4px solid #e1b12c; }
     .news-box a { color: #f1c40f; text-decoration: none; font-weight: bold; }
     .news-box a:hover { color: #ffffff; text-decoration: underline; }
+    .copyright { text-align: center; color: #888888; padding: 20px; font-size: 15px; font-family: sans-serif; letter-spacing: 1px; margin-top: 30px; }
     </style>
 """, unsafe_allow_html=True)
 
 st.title("🏅 Gold Meter - لوحة تحليل الذهب المتكاملة")
 
-# جلب البيانات
 usd_price, usd_egp, carat_prices = fetch_live_gold_data()
 current_price = carat_prices[21]
 ounce_local_fair = usd_price * usd_egp
@@ -262,14 +249,13 @@ with col3: st.markdown(f"<div class='price-card'><h4 style='color:#00b894;'>🏅
 
 st.write("---")
 
-# --- قسم 2: أسعار الجرامات والمشغولات ---
+# --- قسم 2: أسعار الجرامات والسبائك ---
 c24, c22, c21, c18 = st.columns(4)
 c24.metric("عيار 24", f"{carat_prices[24]:,.2f} ج.م")
 c22.metric("عيار 22", f"{carat_prices[22]:,.2f} ج.م")
 c21.metric("عيار 21 (السوق)", f"{current_price:,.2f} ج.م", delta="الأكثر شعبية")
 c18.metric("عيار 18", f"{carat_prices[18]:,.2f} ج.م")
 
-# أسعار السبائك والعملات
 st.markdown("**🪙 أسعار السبائك والعملات الذهبية (بدون مصنعية):**")
 sub1, sub2, sub3, sub4 = st.columns(4)
 sub1.metric("جنيه ذهب (8 جرام عيار 21)", f"{current_price * 8:,.2f} ج.م")
@@ -280,21 +266,19 @@ sub4.metric("سبيكة 50 جرام", f"{carat_prices[24] * 50:,.2f} ج.م")
 st.write("---")
 
 # --- قسم 3: الرسوم البيانية والأخبار ---
-chart_col, news_col = st.columns([2, 1]) # تقسيم الشاشة: ثلثين للرسم البياني وثلث للأخبار
+chart_col, news_col = st.columns([2, 1])
 
 with chart_col:
     st.markdown("### 📊 الاتجاه العام عالمياً (آخر 30 يوم)")
     df_hist = get_gold_history()
     if df_hist is not None:
-        fig = px.line(df_hist, x='Date', y='Price', 
-                      labels={'Price': 'سعر الأوقية ($)', 'Date': 'التاريخ'})
+        fig = px.line(df_hist, x='Date', y='Price', labels={'Price': 'سعر الأوقية ($)', 'Date': 'التاريخ'})
         fig.update_traces(line_color='#e1b12c', line_width=3)
         fig.update_layout(plot_bgcolor='#06060c', paper_bgcolor='#06060c', font_color='white')
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.warning("تعذر جلب البيانات التاريخية في الوقت الحالي.")
 
-    # التوصية الفنية أسفل الرسم البياني
     st.markdown("### 🧠 التحليل المالي والتوصية")
     confidence, op_text, op_color = calculate_algorithm_confidence(current_price, usd_price, usd_egp)
     if op_color == "red": st.error(op_text)
@@ -307,17 +291,13 @@ with news_col:
     news_items = fetch_economy_news()
     if news_items:
         for item in news_items:
-            st.markdown(f"""
-                <div class='news-box'>
-                    <a href="{item['link']}" target="_blank">{item['title']}</a>
-                </div>
-            """, unsafe_allow_html=True)
+            st.markdown(f"<div class='news-box'><a href='{item['link']}' target='_blank'>{item['title']}</a></div>", unsafe_allow_html=True)
     else:
-        st.write("لم نتمكن من جلب الأخبار الآن. جرب لاحقاً.")
+        st.write("لم نتمكن من جلب الأخبار الآن.")
 
 st.write("---")
 
-# --- قسم 4: نظام التنبيهات وإدارة حسابات المستخدمين ---
+# --- قسم 4: نظام التنبيهات ---
 st.markdown("### 🔔 نظام التنبيهات الآلية عبر تليجرام")
 reg_col1, reg_col2 = st.columns(2)
 
@@ -358,18 +338,21 @@ with reg_col2:
                     st.session_state["target_high"] = float(target_high)
                     st.session_state["target_low"] = float(target_low)
                     st.balloons()
-                    st.success("🎉 تم حفظ أهدافك بنجاح! سيتم إشعارك تلقائياً عند وصول السعر.")
+                    st.success("🎉 تم حفظ أهدافك بنجاح!")
                     time.sleep(1)
                     st.rerun()
             else:
                 st.error("⚠️ يرجى إدخال الاسم والـ Chat ID")
                 
     with col_btn2:
-        if st.button("🔄 فحص وإرسال التنبيهات للمستخدمين"):
+        if st.button("🔄 فحص وإرسال التنبيهات"):
             report = check_and_send_alerts_safely(current_price)
             st.info(report)
 
 st.write("---")
-if st.button("🔄 تصفير سجل الإرسال لجميع المستخدمين"):
+if st.button("🔄 تصفير سجل الإرسال"):
     reset_all_alerts()
-    st.success("تم تصفير السجل بنجاح، النظام مستعد لإرسال التنبيهات من جديد.")
+    st.success("تم تصفير السجل بنجاح.")
+
+# ===== إضافة حقوق الملكية الفكرية =====
+st.markdown("<div class='copyright'>© Techno logic 2026. Haytham Elsaadany</div>", unsafe_allow_html=True)
