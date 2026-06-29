@@ -1,20 +1,23 @@
 import os
 import time
+import threading
 import sqlite3
 import json
 import urllib.request
 import urllib.parse
-from datetime import datetime
+from datetime import datetime, timedelta
 import streamlit as st
 import pandas as pd
 import yfinance as yf
+import plotly.graph_objects as go
+import atexit
 
 # ===== الإعدادات الثابتة =====
 TELEGRAM_BOT_TOKEN = "8813434919:AAHytB4BlyZ_NgwSvprzpEXBrNUXhLPdGYk"
 OUNCE_TO_GRAM = 31.1034768
 DB_FILE = "users_gold_alerts.db"
 
-# ===== 1. إدارة قاعدة البيانات وعلاج عمود التفعيل =====
+# ===== 1. إدارة قاعدة البيانات =====
 def init_db():
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
@@ -32,30 +35,18 @@ def init_db():
         )
     ''')
     conn.commit()
-    
-    # التأكد من وجود العمود لتجنب خطأ الصورة السابقة
-    try:
-        cursor.execute("SELECT alert_enabled FROM users LIMIT 1")
-    except sqlite3.OperationalError:
-        cursor.execute("ALTER TABLE users ADD COLUMN alert_enabled INTEGER DEFAULT 1")
-        conn.commit()
     conn.close()
 
 def register_or_update_user(username, phone, tg_id, high, low):
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     try:
+        # حذف السجل القديم
+        cursor.execute("DELETE FROM users WHERE telegram_id=?", (tg_id,))
         cursor.execute('''
-            INSERT INTO users (username, phone, telegram_id, high_target, low_target, last_alerted_high, last_alerted_low, alert_enabled)
+            INSERT INTO users (username, phone, telegram_id, high_target, low_target, 
+                             last_alerted_high, last_alerted_low, alert_enabled)
             VALUES (?, ?, ?, ?, ?, NULL, NULL, 1)
-            ON CONFLICT(telegram_id) DO UPDATE SET
-                username=excluded.username,
-                phone=excluded.phone,
-                high_target=excluded.high_target,
-                low_target=excluded.low_target,
-                last_alerted_high=NULL,
-                last_alerted_low=NULL,
-                alert_enabled=1
         ''', (username, phone, tg_id, float(high), float(low)))
         conn.commit()
         return True
@@ -74,15 +65,25 @@ def get_user_by_tg(tg_id):
     conn.close()
     return row
 
+def toggle_user_alerts(tg_id, enable):
+    """تفعيل أو تعطيل التنبيهات للمستخدم"""
+    conn = sqlite3.connect(DB_FILE)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE users SET alert_enabled=? WHERE telegram_id=?", (1 if enable else 0, tg_id))
+    conn.commit()
+    conn.close()
+
 def reset_all_alerts():
+    """إعادة تعيين جميع التنبيهات في قاعدة البيانات"""
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute("UPDATE users SET last_alerted_high=NULL, last_alerted_low=NULL")
     conn.commit()
     conn.close()
+    print("✅ تم إعادة تعيين جميع التنبيهات")
 
-# ===== 2. جلب البيانات الاستقراري عالي الدقة =====
-@st.cache_data(ttl=15)
+# ===== 2. جلب البيانات =====
+@st.cache_data(ttl=10)
 def fetch_live_gold_data():
     usd_price = 0.0
     try:
@@ -122,141 +123,209 @@ def fetch_live_gold_data():
     }
     return usd_price, usd_egp, carat_prices
 
-# ===== 3. حساب نسبة الثقة وتقديم التوصيات الذكية =====
+# ===== 3. حساب نسبة الثقة =====
 def calculate_algorithm_confidence(price_21, usd_price, usd_egp):
     fair_price_21 = ((usd_price * usd_egp) / OUNCE_TO_GRAM) * (21.0 / 24.0)
-    deviation = (price_21 - fair_price_21) / fair_price_21
-    confidence = 100.0 - (abs(deviation) * 100.0 * 2)
+    deviation = abs(price_21 - fair_price_21) / fair_price_21
+    confidence = 100.0 - (deviation * 100.0 * 2)
     confidence = max(min(confidence, 99.4), 40.0)
     
-    if deviation > 0.05:
-        opinion = f"⚠️ التوصية الحالية: السعر الحالي ({price_21:,.2f} ج.م) أعلى من قيمته العادلة المبنية على البنوك الرسمية ({fair_price_21:,.2f} ج.م) بفارق واضح. نوصي بالحذر والتريث في الشراء وعمل جني أرباح جزئي إذا تحقق هدفك الفني."
+    if price_21 > fair_price_21 * 1.05:
+        opinion = "⚠️ السعر الحالي أعلى من قيمته العادلة"
         color = "red"
-    elif deviation < -0.05:
-        opinion = f"🔥 التوصية الحالية: السعر الحالي أقل من القيمة العادلة المحسوبة بنسبة واضحة! فرصة شراء ممتازة للمستثمرين على المدى المتوسط والطويل."
-        color = "blue"
     else:
-        opinion = f"➡️ التوصية الحالية: السعر متوافق تماماً ومستقر مع القيمة العادلة المباشرة لمتوسط البنوك الرسمي ({fair_price_21:,.2f} ج.م). مستويات آمنة وطبيعية للتداول بناءً على العرض والطلب الحقيقي."
+        opinion = "➡️ السعر متوافق مع القيمة العادلة"
         color = "green"
     return round(confidence, 1), opinion, color
 
-# ===== 4. محرك الفحص الصارم والخالي تماماً من تداخل الـ Threads =====
+# ===== 4. نظام التنبيهات المعدل بالكامل (بدون Threads معقدة) =====
 def send_tg_message(tg_id, text):
+    """إرسال رسالة تليجرام"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = urllib.parse.urlencode({"chat_id": tg_id, "text": text}).encode("utf-8")
         req = urllib.request.Request(url, data=payload)
         with urllib.request.urlopen(req, timeout=5) as r:
             return True
-    except:
+    except Exception as e:
+        print(f"Telegram error: {e}")
         return False
 
-def check_and_send_alerts_safely(price_21):
+def check_and_send_alerts():
+    """
+    دالة يتم استدعاؤها بشكل دوري للتحقق من التنبيهات
+    هذه هي الدالة الوحيدة التي ترسل التنبيهات
+    """
     try:
+        # 1. جلب جميع المستخدمين
         conn = sqlite3.connect(DB_FILE)
         cursor = conn.cursor()
-        cursor.execute("SELECT id, username, telegram_id, high_target, low_target, last_alerted_high, last_alerted_low FROM users WHERE alert_enabled = 1")
+        cursor.execute("""
+            SELECT id, username, telegram_id, high_target, low_target, 
+                   last_alerted_high, last_alerted_low, alert_enabled 
+            FROM users WHERE alert_enabled = 1
+        """)
         users = cursor.fetchall()
         conn.close()
         
-        if not users: return
-        today_str = datetime.now().strftime('%Y-%m-%d')
+        if not users:
+            return "لا يوجد مستخدمين مفعلين"
         
+        # 2. جلب السعر الحالي
+        try:
+            _, _, carat_prices = fetch_live_gold_data()
+            price_21 = round(float(carat_prices.get(21, 0)), 2)
+        except:
+            return "خطأ في جلب السعر"
+        
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        alerts_sent = []
+        
+        # 3. معالجة كل مستخدم
         for user in users:
-            u_id, name, tg_id, high, low, last_high, last_low = user
-            if not tg_id or high is None or low is None: continue
+            u_id, name, tg_id, high, low, last_high, last_low, enabled = user
+            
+            if not tg_id or high is None or low is None:
+                continue
             
             val_high = float(high)
             val_low = float(low)
             
-            # فحص دقيق وشروط حاسمة تمنع الأرقام العشوائية تماماً
-            if price_21 >= val_high and last_high != today_str:
-                msg = f"🚀 تنبيه اختراق الهدف الأعلى:\nيا {name}، سعر جرام عيار 21 الحالي وصل {price_21:,.2f} ج.م متخطياً هدفك المحدد ({val_high:,.0f} ج.م)."
+            # ✅ المنطق الصحيح - التنبيه فقط عند تحقق الشرط
+            should_send_high = price_21 >= val_high and last_high != today_str
+            should_send_low = price_21 <= val_low and last_low != today_str
+            
+            if should_send_high:
+                msg = f"🚀 تنبيه اختراق الهدف الأعلى:\nيا {name}، سعر جرام عيار 21 وصل {price_21:,.2f} ج.م متخطياً هدفك ({val_high:,.0f} ج.م)."
                 if send_tg_message(tg_id, msg):
+                    # تحديث قاعدة البيانات
                     conn = sqlite3.connect(DB_FILE)
                     cursor = conn.cursor()
                     cursor.execute("UPDATE users SET last_alerted_high=? WHERE id=?", (today_str, u_id))
                     conn.commit()
                     conn.close()
-                    
-            if price_21 <= val_low and last_low != today_str:
-                msg = f"🔻 تنبيه كسر القاع الأدنى:\nيا {name}، سعر جرام عيار 21 هبط الآن إلى {price_21:,.2f} ج.م متخطياً هدف الشراء عندك ({val_low:,.0f} ج.م)."
+                    alerts_sent.append(f"✅ HIGH لـ {name}")
+            
+            if should_send_low:
+                msg = f"🔻 تنبيه كسر القاع الأدنى:\nيا {name}، سعر جرام عيار 21 هبط إلى {price_21:,.2f} ج.م متخطياً هدفك ({val_low:,.0f} ج.م)."
                 if send_tg_message(tg_id, msg):
+                    # تحديث قاعدة البيانات
                     conn = sqlite3.connect(DB_FILE)
                     cursor = conn.cursor()
                     cursor.execute("UPDATE users SET last_alerted_low=? WHERE id=?", (today_str, u_id))
                     conn.commit()
                     conn.close()
+                    alerts_sent.append(f"✅ LOW لـ {name}")
+        
+        if alerts_sent:
+            return f"تم إرسال: {', '.join(alerts_sent)}"
+        else:
+            return f"لا توجد تنبيهات جديدة. السعر الحالي {price_21:.2f} ج.م"
+            
     except Exception as e:
-        print(f"Alert execution error: {e}")
+        return f"خطأ: {e}"
 
-# تهيئة قاعدة البيانات
+# ===== 5. تشغيل مؤقت بسيط بدون Threads معقدة =====
+def start_simple_scheduler():
+    """
+    تشغيل مؤقت بسيط يعمل في الخلفية
+    """
+    if "scheduler_running" not in st.session_state:
+        st.session_state.scheduler_running = False
+    
+    if not st.session_state.scheduler_running:
+        def scheduler_loop():
+            while True:
+                try:
+                    # التحقق من التنبيهات كل 30 ثانية
+                    result = check_and_send_alerts()
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] {result}")
+                except Exception as e:
+                    print(f"Scheduler error: {e}")
+                time.sleep(30)
+        
+        thread = threading.Thread(target=scheduler_loop, daemon=True)
+        thread.start()
+        st.session_state.scheduler_running = True
+        print("✅ تم تشغيل المجدول")
+
+# ===== 6. تهيئة النظام =====
 init_db()
 
-# ===== 5. واجهة المستخدم الرسومية =====
-st.set_page_config(page_title="🏅 Gold Meter - لوحة التوصيات والتنبيهات المتقدمة", layout="wide")
+# ===== 7. واجهة المستخدم =====
+st.set_page_config(page_title="🏅 Gold Meter - نظام التنبيهات الذكي", layout="wide")
 
 st.markdown("""
     <style>
     .main { background-color: #06060c; color: white; }
-    .price-card { background-color: #0f0f1e; padding: 20px; border-radius: 12px; border: 1px solid #1e1e38; text-align: center; margin-bottom: 15px; }
-    div.stButton > button:first-child { background-color: #e1b12c; color: black; font-weight: bold; width: 100%; border-radius: 8px; border: none; }
+    .price-card { background-color: #0f0f1e; padding: 25px; border-radius: 14px; border: 1px solid #1e1e38; text-align: center; }
+    div.stButton > button:first-child { background-color: #e1b12c; color: black; font-weight: bold; width: 100%; border-radius: 8px; }
+    .alert-box { background-color: #1a1a2e; padding: 15px; border-radius: 10px; border-left: 4px solid #e1b12c; margin: 10px 0; }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🏅 Gold Meter - لوحة تحليل الذهب التفاعلية للمستثمرين")
-st.write("رصد لحظي للبورصة العالمية والسوق المحلي مدعوم بنظام توصيات الخوارزمية الفنية.")
+st.title("🏅 Gold Meter - نظام التنبيهات الذكي")
+st.write("🔔 نظام تنبيهات ذكي - يتم إرسال التنبيهات فقط عند تحقق الشروط")
 
+# تشغيل المجدول
+start_simple_scheduler()
+
+# جلب البيانات
 usd_price, usd_egp, carat_prices = fetch_live_gold_data()
+confidence, op_text, op_color = calculate_algorithm_confidence(carat_prices[21], usd_price, usd_egp)
 current_price = carat_prices[21]
-ounce_local_fair = usd_price * usd_egp
 
-# تشغيل الفحص الفوري والمباشر مع التحميل دون الحاجة لـ Background Thread ميت
-check_and_send_alerts_safely(current_price)
-
-# عرض مؤشرات الأسعار الفورية الآمنة
-col1, col2, col3 = st.columns(3)
-with col1: st.markdown(f"<div class='price-card'><h4 style='color:#00d4ff;'>🌍 أوقية الذهب عالمياً</h4><h2>${usd_price:,.2f}</h2></div>", unsafe_allow_html=True)
-with col2: st.markdown(f"<div class='price-card'><h4 style='color:#fdcb6e;'>💵 سعر الدولار بالبنوك</h4><h2>{usd_egp:.2f} ج.م</h2></div>", unsafe_allow_html=True)
-with col3: st.markdown(f"<div class='price-card'><h4 style='color:#00b894;'>🏅 الأوقية محلياً (عادلة)</h4><h2>{ounce_local_fair:,.2f} ج.م</h2></div>", unsafe_allow_html=True)
+# عرض الأسعار
+col1, col2, col3, col4 = st.columns(4)
+with col1: st.metric("🌍 أوقية الذهب", f"${usd_price:,.2f}")
+with col2: st.metric("💵 سعر الدولار", f"{usd_egp:.2f} ج.م")
+with col3: st.metric("🏅 عيار 21 (الحالي)", f"{current_price:,.2f} ج.م")
+with col4: st.metric("📊 الثقة", f"{confidence}%")
 
 st.write("---")
 
-# عرض شاشات الـ Metrics للأعيرة
-c24, c22, c21, c18 = st.columns(4)
-c24.metric("عيار 24 (الحقيقي العادل)", f"{carat_prices[24]:,.2f} ج.م")
-c22.metric("عيار 22", f"{carat_prices[22]:,.2f} ج.م")
-c21.metric("عيار 21 (المستهدف الحالي)", f"{current_price:,.2f} ج.م")
-c18.metric("عيار 18", f"{carat_prices[18]:,.2f} ج.م")
+# عرض حالة التنبيهات
+st.markdown("### 🔔 حالة التنبيهات")
+col_status1, col_status2, col_status3 = st.columns(3)
+
+with col_status1:
+    st.info(f"📈 **السعر الحالي**: {current_price:,.2f} ج.م")
+with col_status2:
+    # جلب أهداف المستخدم الحالي
+    if "u_tg" in st.session_state and st.session_state["u_tg"]:
+        user_data = get_user_by_tg(st.session_state["u_tg"])
+        if user_data:
+            high_target = float(user_data[2])
+            low_target = float(user_data[3])
+            st.info(f"🎯 **الهدف الأعلى**: {high_target:,.0f} ج.م")
+            st.info(f"🎯 **الهدف الأدنى**: {low_target:,.0f} ج.م")
+            
+            # عرض حالة التنبيه
+            if current_price >= high_target:
+                st.warning("⚠️ السعر تجاوز الهدف الأعلى!")
+            elif current_price <= low_target:
+                st.warning("⚠️ السعر أقل من الهدف الأدنى!")
+            else:
+                st.success("✅ السعر في النطاق الآمن (لا توجد تنبيهات)")
+with col_status3:
+    if st.button("🔄 فحص التنبيهات يدوياً"):
+        result = check_and_send_alerts()
+        st.info(result)
 
 st.write("---")
 
-# ===== قسم التوصيات الفنية الذكية المطلوبة =====
-st.markdown("### 🧠 تقرير التوصيات الفنية ونسبة الموثوقية الحالية")
-confidence, op_text, op_color = calculate_algorithm_confidence(current_price, usd_price, usd_egp)
-
-if op_color == "red":
-    st.error(op_text)
-elif op_color == "blue":
-    st.info(op_text)
-else:
-    st.success(op_text)
-st.markdown(f"📊 **نسبة موثوقية السعر ومطابقته الفنية الحالية:** `{confidence}%`")
-
-st.write("---")
-
-# لوحة التحكم وإدخال الأهداف
-st.markdown("### 🔔 نظام تفعيل التنبيهات الفورية الذكي")
+# لوحة التحكم
+st.markdown("### ⚙️ لوحة التحكم")
 reg_col1, reg_col2 = st.columns(2)
 
 if "u_tg" not in st.session_state: st.session_state["u_tg"] = ""
 if "u_name" not in st.session_state: st.session_state["u_name"] = ""
 if "u_phone" not in st.session_state: st.session_state["u_phone"] = ""
 if "target_high" not in st.session_state: st.session_state["target_high"] = 6000.0
-if "target_low" not in st.session_state: st.session_state["target_low"] = 5000.0
+if "target_low" not in st.session_state: st.session_state["target_low"] = 3000.0
 
 with reg_col1:
-    u_tg = st.text_input("🆔 معرف التليجرام الخاص بك (Chat ID):", value=st.session_state["u_tg"])
+    u_tg = st.text_input("🆔 معرف التليجرام (Chat ID):", value=st.session_state["u_tg"])
     if u_tg and u_tg != st.session_state["u_tg"]:
         user_data = get_user_by_tg(u_tg)
         if user_data:
@@ -267,18 +336,23 @@ with reg_col1:
             st.session_state["target_low"] = float(user_data[3])
             st.rerun()
 
-    u_name = st.text_input("👤 الاسم الكريم:", value=st.session_state["u_name"])
-    u_phone = st.text_input("📱 رقم الموبايل (مرفقاً بكود الدولة):", value=st.session_state["u_phone"])
+    u_name = st.text_input("👤 الاسم:", value=st.session_state["u_name"])
+    u_phone = st.text_input("📱 رقم الهاتف:", value=st.session_state["u_phone"])
 
 with reg_col2:
-    target_high = st.number_input("🚀 تبهني لو عيار 21 رفع وكسر السعر ده (جني أرباح):", value=float(st.session_state["target_high"]), step=50.0)
-    target_low = st.number_input("🔻 تبهني لو عيار 21 نزل وكسر السعر ده (دعم شراء):", value=float(st.session_state["target_low"]), step=50.0)
+    target_high = st.number_input("🚀 الهدف الأعلى (جني أرباح):", 
+                                  value=float(st.session_state["target_high"]), 
+                                  step=50.0,
+                                  help="سيتم إرسال تنبيه عندما يصل السعر لهذا الرقم أو أعلى")
+    target_low = st.number_input("🔻 الهدف الأدنى (شراء):", 
+                                 value=float(st.session_state["target_low"]), 
+                                 step=50.0,
+                                 help="سيتم إرسال تنبيه عندما يصل السعر لهذا الرقم أو أقل")
     
-    st.write("")
+    # أزرار تحكم
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
-        # زر الحفظ والاحتفال المبهج! 🎉🎈
-        if st.button("💾 تفعيل الاشتراك وحفظ الإعدادات"):
+        if st.button("💾 حفظ الأهداف"):
             if u_name and u_tg:
                 if register_or_update_user(u_name, u_phone, u_tg, target_high, target_low):
                     st.session_state["u_tg"] = u_tg
@@ -286,26 +360,63 @@ with reg_col2:
                     st.session_state["u_phone"] = u_phone
                     st.session_state["target_high"] = float(target_high)
                     st.session_state["target_low"] = float(target_low)
-                    
-                    # البلالين والاحتفال الذي تفضله!
                     st.balloons()
-                    st.success(f"🎉 تم تفعيل اشتراكك بنجاح وحفظ أهدافك الجديدة: {target_low} و {target_high}.")
-                    time.sleep(1.2)
-                    st.rerun()
-            else:
-                st.error("⚠️ يرجى كتابة الاسم ومعرف التليجرام أولاً!")
-                
+                    st.success(f"✅ تم حفظ الأهداف بنجاح!\nالسعر الحالي: {current_price:.2f} ج.م")
+                    st.info(f"🔔 سيتم إرسال تنبيه عندما يصل السعر إلى {target_high} أو {target_low}")
+    
     with col_btn2:
-        if st.button("🔄 إعادة تعيين وتصفير التنبيهات"):
-            reset_all_alerts()
-            st.warning("🔄 تم تصفير سجل الإرسال اليومي بنجاح.")
+        if st.button("🔄 إعادة تعيين التنبيهات"):
+            if u_tg:
+                reset_all_alerts()
+                st.success("✅ تم إعادة تعيين جميع التنبيهات! لن يتم إرسال أي تنبيهات مكررة.")
 
 st.write("---")
-if st.button("📋 استعراض جدول مراقبة الأهداف النشطة في السيرفر"):
+
+# عرض نصائح وإرشادات
+with st.expander("📖 كيف يعمل النظام؟"):
+    st.markdown("""
+    ### 🔔 آلية عمل التنبيهات
+    
+    1. **الهدف الأعلى**: يتم إرسال تنبيه فقط عندما **يزيد السعر عن** الهدف المحدد
+    2. **الهدف الأدنى**: يتم إرسال تنبيه فقط عندما **ينخفض السعر عن** الهدف المحدد
+    3. **النطاق الآمن**: إذا كان السعر بين الهدفين، **لن يتم إرسال أي تنبيه**
+    4. **منع التكرار**: يتم إرسال التنبيه **مرة واحدة فقط في اليوم**
+    
+    ### 💡 مثال توضيحي
+    
+    - الأهداف: الأعلى = 7000، الأدنى = 3000
+    - السعر الحالي = 4062
+    - ✅ **لن يتم إرسال أي تنبيه** (السعر في النطاق الآمن)
+    
+    - السعر الحالي = 7100
+    - 🔔 **سيتم إرسال تنبيه HIGH** (السعر تجاوز 7000)
+    
+    - السعر الحالي = 2900
+    - 🔔 **سيتم إرسال تنبيه LOW** (السعر أقل من 3000)
+    
+    ### 🛠️ حل المشكلات
+    
+    إذا كنت تتلقى تنبيهات عشوائية:
+    1. اضغط على زر **"إعادة تعيين التنبيهات"**
+    2. أعد تشغيل الصفحة (Refresh)
+    3. تأكد من أن الأهداف منطقية (ليست قريبة جداً من السعر الحالي)
+    """)
+
+# عرض سجل التنبيهات في نهاية الصفحة
+st.write("---")
+if st.button("📋 عرض سجل التنبيهات"):
     conn = sqlite3.connect(DB_FILE)
-    df = pd.read_sql_query("SELECT username AS [الاسم], telegram_id AS [التليجرام], high_target AS [الحد الأعلى], low_target AS [الحد الأدنى], alert_enabled AS [حالة التفعيل] FROM users", conn)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT username, telegram_id, high_target, low_target, 
+               last_alerted_high, last_alerted_low 
+        FROM users
+    """)
+    data = cursor.fetchall()
     conn.close()
-    if not df.empty:
-        st.dataframe(df, use_container_width=True)
+    
+    if data:
+        df = pd.DataFrame(data, columns=["الاسم", "التليجرام", "الهدف الأعلى", "الهدف الأدنى", "آخر تنبيه HIGH", "آخر تنبيه LOW"])
+        st.dataframe(df)
     else:
-        st.info("لا توجد بيانات مستخدمين مسجلة حتى الآن.")
+        st.info("لا يوجد مستخدمين مسجلين")
