@@ -6,200 +6,69 @@ import feedparser
 import json
 import requests
 from datetime import datetime, timedelta
-from sqlalchemy import create_engine, text
-import urllib.parse
 import time
-import threading
-import logging
+
+# إعداد الصفحة العام
+st.set_page_config(page_title="Gold Meter Pro 2026", layout="wide", page_icon="🏅")
 
 # ==========================================
-# إعدادات الصفحة
+# 1. نظام إرسال رسائل تليجرام (معدل)
 # ==========================================
-st.set_page_config(
-    page_title="Gold Meter Pro 2026",
-    layout="wide",
-    page_icon="🏅",
-    initial_sidebar_state="expanded"
-)
-
-# ==========================================
-# 1. الاتصال بقاعدة البيانات (Supabase)
-# ==========================================
-def get_supabase_engine():
-    """إنشاء اتصال بـ Supabase"""
+def send_telegram_message(chat_id, text):
     try:
-        db = st.secrets["postgres"]
-        password = urllib.parse.quote_plus(db["password"])
-        url = f"postgresql://{db['user']}:{password}@{db['host']}:{db['port']}/{db['database']}"
-        engine = create_engine(
-            url,
-            connect_args={"sslmode": "require"},
-            pool_pre_ping=True,
-            pool_recycle=3600
-        )
-        return engine
-    except Exception as e:
-        st.error(f"❌ خطأ في الاتصال بـ Supabase: {e}")
-        return None
-
-def init_supabase_tables():
-    """تهيئة الجداول في Supabase"""
-    engine = get_supabase_engine()
-    if not engine:
-        return False
-    
-    try:
-        with engine.connect() as conn:
-            # جدول التنبيهات
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS gold_alerts (
-                    id SERIAL PRIMARY KEY,
-                    username TEXT NOT NULL,
-                    tg_id TEXT NOT NULL,
-                    karat TEXT DEFAULT '21',
-                    high_target REAL,
-                    low_target REAL,
-                    triggered INTEGER DEFAULT 0,
-                    last_alerted_date DATE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """))
-            
-            # جدول إحصائيات الزوار
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS site_stats (
-                    id SERIAL PRIMARY KEY,
-                    views INTEGER DEFAULT 0,
-                    last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """))
-            conn.execute(text("""
-                INSERT INTO site_stats (id, views) VALUES (1, 0)
-                ON CONFLICT (id) DO NOTHING
-            """))
-            
-            # جدول سجل الأسعار
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS price_history (
-                    id SERIAL PRIMARY KEY,
-                    karat TEXT,
-                    price REAL,
-                    recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """))
-            
-            conn.commit()
-            return True
-    except Exception as e:
-        st.error(f"❌ خطأ في تهيئة الجداول: {e}")
-        return False
-
-# ==========================================
-# 2. نظام إرسال رسائل تليجرام (المعدل والمُحسَّن)
-# ==========================================
-def send_telegram_message(chat_id, text, parse_mode='Markdown'):
-    """
-    إرسال رسالة عبر تليجرام بوت
-    
-    Args:
-        chat_id (str): معرف المستخدم في تليجرام
-        text (str): نص الرسالة
-        parse_mode (str): وضع التنسيق (Markdown أو HTML)
-    
-    Returns:
-        tuple: (نجاح, رسالة)
-    """
-    try:
-        # التحقق من وجود التوكن
         if "TELEGRAM_BOT_TOKEN" not in st.secrets:
-            return False, "❌ مفتاح TELEGRAM_BOT_TOKEN غير موجود في الـ Secrets!"
+            return False, "❌ مفتاح TELEGRAM_BOT_TOKEN غير موجود!"
         
         token = st.secrets["TELEGRAM_BOT_TOKEN"].strip()
-        if not token:
-            return False, "❌ توكن التليجرام فارغ!"
-        
-        # ✅ التصحيح: استخدام telegram.org
+        # ✅ رابط صحيح
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         
-        # تنظيف chat_id
-        chat_id = str(chat_id).strip()
-        if not chat_id.isdigit():
-            return False, f"❌ معرف التليجرام '{chat_id}' غير صحيح (يجب أن يكون أرقام فقط)"
-        
-        # تحضير payload
         payload = {
-            "chat_id": chat_id,
+            "chat_id": str(chat_id).strip(),
             "text": text,
-            "parse_mode": parse_mode,
-            "disable_web_page_preview": True
+            "parse_mode": "Markdown"
         }
         
-        # إرسال الطلب
-        response = requests.post(url, json=payload, timeout=15)
-        
-        # التحقق من الاستجابة
+        response = requests.post(url, json=payload, timeout=10)
         if response.status_code == 200:
-            return True, "✅ تم إرسال الرسالة بنجاح"
+            return True, "✅ تم الإرسال"
         else:
-            error_detail = response.json() if response.text else "لا توجد تفاصيل"
-            return False, f"❌ فشل الإرسال (كود {response.status_code}): {error_detail}"
-            
-    except requests.exceptions.Timeout:
-        return False, "❌ انتهى وقت الاتصال بسيرفر تليجرام"
-    except requests.exceptions.ConnectionError:
-        return False, "❌ مشكلة في الاتصال بالإنترنت"
+            return False, f"❌ خطأ {response.status_code}: {response.text}"
     except Exception as e:
-        return False, f"❌ خطأ غير متوقع: {str(e)}"
-
-def test_telegram_bot():
-    """اختبار الاتصال ببوت التليجرام"""
-    try:
-        if "TELEGRAM_BOT_TOKEN" not in st.secrets:
-            return False, "❌ التوكن غير موجود"
-        
-        token = st.secrets["TELEGRAM_BOT_TOKEN"].strip()
-        url = f"https://api.telegram.org/bot{token}/getMe"
-        
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            if data.get('ok'):
-                bot_info = data.get('result', {})
-                return True, f"✅ البوت يعمل: @{bot_info.get('username', 'unknown')}"
-        return False, f"❌ فشل اختبار البوت (كود {response.status_code})"
-    except Exception as e:
-        return False, f"❌ خطأ: {str(e)}"
+        return False, f"❌ خطأ في الشبكة: {str(e)}"
 
 # ==========================================
-# 3. إدارة قاعدة البيانات
+# 2. إدارة قاعدة البيانات المحلية (SQLite)
 # ==========================================
-def init_local_db():
-    """تهيئة قاعدة البيانات المحلية (SQLite) كنسخة احتياطية"""
+def init_db():
+    """تهيئة قاعدة البيانات المحلية"""
     conn = sqlite3.connect('gold_data.db')
     c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS gold_alerts 
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                  username TEXT, 
-                  tg_id TEXT, 
-                  karat TEXT, 
-                  high REAL, 
-                  low REAL,
-                  triggered INTEGER DEFAULT 0,
-                  last_alerted_date TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS site_stats (id INTEGER PRIMARY KEY, views INTEGER)''')
+    
+    # جدول التنبيهات
+    c.execute('''CREATE TABLE IF NOT EXISTS gold_alerts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT,
+        tg_id TEXT,
+        karat TEXT,
+        high_target REAL,
+        low_target REAL,
+        triggered INTEGER DEFAULT 0,
+        last_alerted_date TEXT
+    )''')
+    
+    # جدول إحصائيات الزوار
+    c.execute('''CREATE TABLE IF NOT EXISTS site_stats (
+        id INTEGER PRIMARY KEY,
+        views INTEGER
+    )''')
     c.execute("INSERT OR IGNORE INTO site_stats (id, views) VALUES (1, 0)")
+    
     conn.commit()
     conn.close()
 
-def init_db():
-    """تهيئة جميع قواعد البيانات"""
-    init_local_db()
-    init_supabase_tables()
-
 def update_and_get_views():
     """تحديث وقراءة عدد الزوار"""
-    # تحديث في SQLite
     conn = sqlite3.connect('gold_data.db')
     c = conn.cursor()
     if 'tracked' not in st.session_state:
@@ -209,108 +78,75 @@ def update_and_get_views():
     c.execute("SELECT views FROM site_stats WHERE id = 1")
     views = c.fetchone()[0]
     conn.close()
-    
-    # تحديث في Supabase
-    try:
-        engine = get_supabase_engine()
-        if engine:
-            with engine.connect() as conn:
-                conn.execute(text("""
-                    UPDATE site_stats SET views = views + 1, last_updated = CURRENT_TIMESTAMP
-                    WHERE id = 1
-                """))
-                conn.commit()
-    except:
-        pass
-    
     return views
 
-def save_alert_supabase(username, tg_id, karat, high, low):
-    """حفظ التنبيه في Supabase"""
-    engine = get_supabase_engine()
-    if not engine:
-        return False, "❌ فشل الاتصال بقاعدة البيانات"
-    
+def save_alert(username, tg_id, karat, high, low):
+    """حفظ التنبيه في SQLite"""
+    conn = sqlite3.connect('gold_data.db')
+    c = conn.cursor()
     try:
-        with engine.connect() as conn:
-            # حذف التنبيهات القديمة للمستخدم
-            conn.execute(text("""
-                DELETE FROM gold_alerts WHERE tg_id = :tg_id
-            """), {"tg_id": tg_id})
-            
-            # إدراج تنبيه جديد
-            conn.execute(text("""
-                INSERT INTO gold_alerts (username, tg_id, karat, high_target, low_target, triggered)
-                VALUES (:username, :tg_id, :karat, :high, :low, 0)
-            """), {
-                "username": username,
-                "tg_id": tg_id,
-                "karat": karat,
-                "high": float(high),
-                "low": float(low)
-            })
-            conn.commit()
-            return True, "✅ تم حفظ التنبيه بنجاح"
+        c.execute("""
+            INSERT INTO gold_alerts (username, tg_id, karat, high_target, low_target, triggered)
+            VALUES (?, ?, ?, ?, ?, 0)
+        """, (username, tg_id, karat, float(high), float(low)))
+        conn.commit()
+        return True, "✅ تم الحفظ بنجاح"
     except Exception as e:
-        return False, f"❌ خطأ في حفظ التنبيه: {e}"
+        return False, f"❌ خطأ: {e}"
+    finally:
+        conn.close()
 
-def get_alerts_supabase(only_active=True):
-    """جلب التنبيهات من Supabase"""
-    engine = get_supabase_engine()
-    if not engine:
-        return pd.DataFrame()
-    
+def get_alerts(only_active=True):
+    """جلب التنبيهات من SQLite"""
+    conn = sqlite3.connect('gold_data.db')
     try:
-        with engine.connect() as conn:
-            query = "SELECT id, username, tg_id, karat, high_target, low_target, triggered, last_alerted_date, created_at FROM gold_alerts"
-            if only_active:
-                query += " WHERE triggered = 0"
-            query += " ORDER BY id DESC"
-            
-            result = conn.execute(text(query))
-            rows = result.fetchall()
-            if rows:
-                return pd.DataFrame(rows, columns=["id", "username", "tg_id", "karat", "high_target", "low_target", "triggered", "last_alerted_date", "created_at"])
-            return pd.DataFrame()
+        query = "SELECT id, username, tg_id, karat, high_target, low_target, triggered, last_alerted_date FROM gold_alerts"
+        if only_active:
+            query += " WHERE triggered = 0"
+        query += " ORDER BY id DESC"
+        df = pd.read_sql_query(query, conn)
+        return df
     except Exception as e:
         st.error(f"❌ خطأ في جلب التنبيهات: {e}")
         return pd.DataFrame()
+    finally:
+        conn.close()
 
-def update_alert_triggered_supabase(alert_id):
-    """تحديث حالة التنبيه في Supabase"""
-    engine = get_supabase_engine()
-    if not engine:
-        return False
-    
+def update_alert_triggered(alert_id):
+    """تحديث حالة التنبيه بعد الإرسال"""
+    conn = sqlite3.connect('gold_data.db')
+    c = conn.cursor()
     try:
-        with engine.connect() as conn:
-            conn.execute(text("""
-                UPDATE gold_alerts SET triggered = 1, last_alerted_date = CURRENT_DATE
-                WHERE id = :id
-            """), {"id": alert_id})
-            conn.commit()
-            return True
+        today = datetime.now().strftime('%Y-%m-%d')
+        c.execute("""
+            UPDATE gold_alerts 
+            SET triggered = 1, last_alerted_date = ?
+            WHERE id = ?
+        """, (today, alert_id))
+        conn.commit()
+        return True
     except Exception as e:
         print(f"خطأ في تحديث التنبيه: {e}")
         return False
+    finally:
+        conn.close()
 
-def delete_alert_supabase(alert_id):
-    """حذف تنبيه من Supabase"""
-    engine = get_supabase_engine()
-    if not engine:
-        return False
-    
+def delete_alert(alert_id):
+    """حذف تنبيه"""
+    conn = sqlite3.connect('gold_data.db')
+    c = conn.cursor()
     try:
-        with engine.connect() as conn:
-            conn.execute(text("DELETE FROM gold_alerts WHERE id = :id"), {"id": alert_id})
-            conn.commit()
-            return True
+        c.execute("DELETE FROM gold_alerts WHERE id = ?", (alert_id,))
+        conn.commit()
+        return True
     except Exception as e:
         print(f"خطأ في حذف التنبيه: {e}")
         return False
+    finally:
+        conn.close()
 
 # ==========================================
-# 4. جلب الأسعار وحساب العيارات
+# 3. جلب الأسعار وحساب العيارات
 # ==========================================
 @st.cache_data(ttl=30)
 def get_market_data():
@@ -341,19 +177,17 @@ def get_market_data():
     }, gold_oz, usd_egp
 
 # ==========================================
-# 5. محرك التنبيهات التلقائي
+# 4. محرك التنبيهات اليدوي (للتشغيل عند الطلب)
 # ==========================================
 def check_and_send_alerts():
-    """فحص التنبيهات وإرسالها"""
+    """فحص التنبيهات وإرسالها - يتم استدعاؤها يدوياً"""
     try:
-        # جلب الأسعار الحالية
         prices, _, _ = get_market_data()
         today = datetime.now().strftime('%Y-%m-%d')
         
-        # جلب التنبيهات النشطة
-        df_alerts = get_alerts_supabase(only_active=True)
+        df_alerts = get_alerts(only_active=True)
         if df_alerts.empty:
-            return
+            return "ℹ️ لا توجد تنبيهات نشطة"
         
         alerts_sent = []
         
@@ -366,10 +200,8 @@ def check_and_send_alerts():
             low_target = float(row['low_target'])
             last_alerted = row.get('last_alerted_date')
             
-            # السعر الحالي للعيار المحدد
             current_price = prices.get(karat, prices['21'])
             
-            # التحقق من الشروط
             should_send = False
             alert_msg = ""
             
@@ -402,42 +234,24 @@ def check_and_send_alerts():
                 should_send = True
             
             if should_send:
-                # إرسال الرسالة
                 success, msg = send_telegram_message(tg_id, alert_msg)
                 if success:
-                    # تحديث حالة التنبيه
-                    update_alert_triggered_supabase(alert_id)
+                    update_alert_triggered(alert_id)
                     alerts_sent.append(f"✅ تنبيه لـ {username}")
+                else:
+                    alerts_sent.append(f"❌ فشل إرسال لـ {username}: {msg}")
         
-        return alerts_sent
-        
+        if alerts_sent:
+            return "\n".join(alerts_sent)
+        else:
+            current_price = prices.get('21', 0)
+            return f"ℹ️ لا توجد تنبيهات جديدة. السعر الحالي لعيار 21: {current_price:,.2f} ج.م"
+            
     except Exception as e:
-        print(f"خطأ في محرك التنبيهات: {e}")
-        return []
+        return f"❌ خطأ: {e}"
 
 # ==========================================
-# 6. دالة تشغيل الخلفية (Background Thread)
-# ==========================================
-def start_background_checker():
-    """تشغيل محرك التنبيهات في الخلفية"""
-    if "checker_running" not in st.session_state:
-        st.session_state.checker_running = False
-    
-    if not st.session_state.checker_running:
-        def checker_loop():
-            while True:
-                try:
-                    check_and_send_alerts()
-                except Exception as e:
-                    print(f"خطأ في الحلقة الخلفية: {e}")
-                time.sleep(30)  # الفحص كل 30 ثانية
-        
-        thread = threading.Thread(target=checker_loop, daemon=True)
-        thread.start()
-        st.session_state.checker_running = True
-
-# ==========================================
-# 7. جلب المنحنى البياني
+# 5. جلب المنحنى البياني
 # ==========================================
 @st.cache_data(ttl=1800)
 def get_safe_historical_data():
@@ -457,19 +271,17 @@ def get_safe_historical_data():
     return df_fallback['Close'], True
 
 # ==========================================
-# 8. التطبيق الرئيسي
+# 6. التطبيق الرئيسي
 # ==========================================
 def main():
-    # تهيئة النظام
+    # تهيئة قاعدة البيانات
     init_db()
     views_count = update_and_get_views()
-    
-    # تشغيل محرك الخلفية
-    start_background_checker()
     
     # العنوان الرئيسي
     st.title("🏅 Gold Meter Pro - المنظومة التفاعلية الشاملة")
     st.caption(f"👁️ عدد زيارات المنصة: {views_count} زائر")
+    st.info("💡 **ملاحظة:** النظام يعمل الآن بقاعدة بيانات محلية (SQLite) لضمان الاستقرار التام.")
     
     # جلب الأسعار
     prices, gold_oz, usd_egp = get_market_data()
@@ -538,11 +350,19 @@ def main():
         col_test1, col_test2 = st.columns([3, 1])
         with col_test2:
             if st.button("🔍 اختبار البوت"):
-                success, msg = test_telegram_bot()
-                if success:
-                    st.success(msg)
+                if "TELEGRAM_BOT_TOKEN" in st.secrets:
+                    try:
+                        token = st.secrets["TELEGRAM_BOT_TOKEN"].strip()
+                        url = f"https://api.telegram.org/bot{token}/getMe"
+                        response = requests.get(url, timeout=10)
+                        if response.status_code == 200:
+                            st.success("✅ البوت يعمل بنجاح")
+                        else:
+                            st.error(f"❌ فشل اختبار البوت: {response.status_code}")
+                    except Exception as e:
+                        st.error(f"❌ خطأ: {e}")
                 else:
-                    st.error(msg)
+                    st.error("❌ التوكن غير موجود في secrets")
         
         st.divider()
         
@@ -575,10 +395,10 @@ def main():
                                         key="input_low")
         
         # أزرار التحكم
-        col_btn1, col_btn2, col_btn3 = st.columns(3)
+        col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
         
         with col_btn1:
-            if st.button("🚀 تفعيل التنبيه", use_container_width=True, type="primary"):
+            if st.button("💾 حفظ التنبيه", use_container_width=True, type="primary"):
                 if not username or not telegram_id:
                     st.error("❌ يرجى إدخال الاسم ومعرف التليجرام")
                 elif not telegram_id.isdigit():
@@ -601,11 +421,11 @@ def main():
                     
                     if success:
                         # حفظ في قاعدة البيانات
-                        save_success, save_msg = save_alert_supabase(username, telegram_id, selected_karat, high_target, low_target)
+                        save_success, save_msg = save_alert(username, telegram_id, selected_karat, high_target, low_target)
                         
                         if save_success:
                             st.balloons()
-                            st.success(f"✅ تم التفعيل بنجاح! {save_msg}")
+                            st.success(f"✅ {save_msg}")
                             st.info("📱 تم إرسال رسالة تأكيد لهاتفك")
                             time.sleep(1)
                             st.rerun()
@@ -616,33 +436,44 @@ def main():
                         st.warning("💡 تأكد من أن Chat ID صحيح وأن البوت يعمل")
         
         with col_btn2:
-            if st.button("🔄 فحص التنبيهات الآن", use_container_width=True):
+            if st.button("🔔 فحص التنبيهات", use_container_width=True):
                 with st.spinner("جاري فحص التنبيهات..."):
                     result = check_and_send_alerts()
-                    if result:
-                        for msg in result:
-                            st.success(msg)
-                    else:
-                        st.info("✅ لا توجد تنبيهات جديدة")
+                    st.info(result)
+                    if "✅" in result:
+                        st.balloons()
         
         with col_btn3:
-            if st.button("🗑️ مسح كل التنبيهات", use_container_width=True):
+            if st.button("🔄 إعادة تعيين", use_container_width=True):
                 if telegram_id:
-                    engine = get_supabase_engine()
-                    if engine:
-                        with engine.connect() as conn:
-                            conn.execute(text("DELETE FROM gold_alerts WHERE tg_id = :tg_id"), {"tg_id": telegram_id})
-                            conn.commit()
-                        st.success("✅ تم مسح تنبيهاتك بنجاح")
-                        st.rerun()
+                    conn = sqlite3.connect('gold_data.db')
+                    c = conn.cursor()
+                    c.execute("UPDATE gold_alerts SET triggered = 0, last_alerted_date = NULL WHERE tg_id = ?", (telegram_id,))
+                    conn.commit()
+                    conn.close()
+                    st.success("✅ تم إعادة تعيين التنبيهات!")
+                    st.rerun()
+                else:
+                    st.warning("⚠️ أدخل معرف التليجرام أولاً")
+        
+        with col_btn4:
+            if st.button("🗑️ مسح التنبيهات", use_container_width=True):
+                if telegram_id:
+                    conn = sqlite3.connect('gold_data.db')
+                    c = conn.cursor()
+                    c.execute("DELETE FROM gold_alerts WHERE tg_id = ?", (telegram_id,))
+                    conn.commit()
+                    conn.close()
+                    st.success("✅ تم مسح تنبيهاتك!")
+                    st.rerun()
                 else:
                     st.warning("⚠️ أدخل معرف التليجرام أولاً")
         
         st.divider()
         
         # عرض التنبيهات النشطة
-        st.subheader("📋 التنبيهات النشطة")
-        df_alerts = get_alerts_supabase(only_active=False)
+        st.subheader("📋 التنبيهات المسجلة")
+        df_alerts = get_alerts(only_active=False)
         
         if not df_alerts.empty:
             # تنسيق الجدول
@@ -651,15 +482,6 @@ def main():
             display_df['الحالة'] = display_df['الحالة'].apply(lambda x: '🟢 نشط' if x == 0 else '🔴 منفذ')
             
             st.dataframe(display_df, use_container_width=True)
-            
-            # إحصائيات
-            col_stat1, col_stat2 = st.columns(2)
-            with col_stat1:
-                active_count = len(df_alerts[df_alerts['triggered'] == 0])
-                st.metric("🟢 التنبيهات النشطة", active_count)
-            with col_stat2:
-                triggered_count = len(df_alerts[df_alerts['triggered'] == 1])
-                st.metric("🔴 التنبيهات المنفذة", triggered_count)
         else:
             st.info("ℹ️ لا توجد تنبيهات مسجلة")
     
@@ -667,41 +489,22 @@ def main():
     with tab5:
         st.subheader("⚙️ الإدارة والتحكم")
         
-        # اختبار الاتصال بقاعدة البيانات
-        st.markdown("### 🔌 اختبار الاتصالات")
-        
-        col_test1, col_test2 = st.columns(2)
-        
-        with col_test1:
-            if st.button("🔍 اختبار Supabase"):
-                engine = get_supabase_engine()
-                if engine:
-                    try:
-                        with engine.connect() as conn:
-                            result = conn.execute(text("SELECT 1"))
-                            st.success("✅ الاتصال بـ Supabase ناجح")
-                    except Exception as e:
-                        st.error(f"❌ فشل الاتصال بـ Supabase: {e}")
-                else:
-                    st.error("❌ لا يمكن إنشاء محرك الاتصال")
-        
-        with col_test2:
-            if st.button("🔍 اختبار تليجرام"):
-                success, msg = test_telegram_bot()
-                if success:
-                    st.success(msg)
-                else:
-                    st.error(msg)
-        
-        st.divider()
-        
-        # عرض جميع المستخدمين
-        st.markdown("### 📊 جميع المستخدمين")
-        df_alerts = get_alerts_supabase(only_active=False)
-        if not df_alerts.empty:
-            st.dataframe(df_alerts, use_container_width=True)
+        # عرض جميع التنبيهات
+        st.markdown("### 📊 جميع التنبيهات")
+        df_all = get_alerts(only_active=False)
+        if not df_all.empty:
+            st.dataframe(df_all, use_container_width=True)
+            
+            # إحصائيات
+            col_stat1, col_stat2 = st.columns(2)
+            with col_stat1:
+                active = len(df_all[df_all['triggered'] == 0])
+                st.metric("🟢 التنبيهات النشطة", active)
+            with col_stat2:
+                triggered = len(df_all[df_all['triggered'] == 1])
+                st.metric("🔴 التنبيهات المنفذة", triggered)
         else:
-            st.info("ℹ️ لا يوجد مستخدمين")
+            st.info("ℹ️ لا توجد بيانات")
         
         st.divider()
         
