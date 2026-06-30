@@ -5,26 +5,41 @@ import yfinance as yf
 import feedparser
 import json
 import urllib.request
+import urllib.parse
 from datetime import datetime, timedelta
 
 # إعداد الصفحة العام
 st.set_page_config(page_title="Gold Meter Pro 2026", layout="wide", page_icon="🏅")
 
 # ==========================================
-# 1. إدارة قاعدة البيانات وعداد الزوار
+# 1. نظام إرسال رسائل تليجرام الحقيقية
+# ==========================================
+def send_telegram_message(chat_id, text):
+    if "TELEGRAM_BOT_TOKEN" in st.secrets:
+        token = st.secrets["TELEGRAM_BOT_TOKEN"]
+        url = f"https://api.telegram.com/bot{token}/sendMessage"
+        data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode("utf-8")
+        try:
+            with urllib.request.urlopen(url, data=data, timeout=5) as r:
+                return True
+        except Exception:
+            pass
+    return False
+
+# ==========================================
+# 2. إدارة قاعدة البيانات وعداد الزوار
 # ==========================================
 def init_db():
     conn = sqlite3.connect('gold_data.db')
     c = conn.cursor()
-    # جدول المستخدمين والتنبيهات
-    c.execute('''CREATE TABLE IF NOT EXISTS users 
+    c.execute('''CREATE TABLE IF NOT EXISTS gold_alerts 
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                   username TEXT, 
-                  tg_id TEXT UNIQUE, 
+                  tg_id TEXT, 
                   karat TEXT, 
                   high REAL, 
-                  low REAL)''')
-    # جدول عداد الزوار
+                  low REAL,
+                  triggered INTEGER DEFAULT 0)''')
     c.execute('''CREATE TABLE IF NOT EXISTS site_stats (id INTEGER PRIMARY KEY, views INTEGER)''')
     c.execute("INSERT OR IGNORE INTO site_stats (id, views) VALUES (1, 0)")
     conn.commit()
@@ -43,18 +58,15 @@ def update_and_get_views():
     return views
 
 # ==========================================
-# 2. جلب الأسعار وحساب العيارات
+# 3. جلب الأسعار وحساب العيارات
 # ==========================================
 def get_market_data():
     try:
-        # جلب سعر الأوقية العالمي
         with urllib.request.urlopen("https://api.gold-api.com/price/XAU", timeout=5) as r:
             gold_oz = float(json.load(r)['price'])
-        # جلب سعر الدولار مقابل الجنيه (سعر البنك الرسمي الافتراضي)
         with urllib.request.urlopen("https://open.er-api.com/v6/latest/USD", timeout=5) as r:
             usd_egp = float(json.load(r)['rates']['EGP'])
     except:
-        # قيم احتياطية مستقرة في حال فشل الاتصال بالخادم الخارجي
         gold_oz, usd_egp = 2330.0, 49.50
     
     g24 = (gold_oz * usd_egp) / 31.1035
@@ -66,9 +78,9 @@ def get_market_data():
     }, gold_oz, usd_egp
 
 # ==========================================
-# 3. حل مشكلة حظر البورصة وجلب المنحنى البياني الآمن
+# 4. جلب المنحنى البياني الآمن (حماية من الحظر)
 # ==========================================
-@st.cache_data(ttl=1800)  # تخزين البيانات لمدة 30 دقيقة لتقليل الطلبات وتجنب الحظر
+@st.cache_data(ttl=1800)
 def get_safe_historical_data():
     try:
         ticker = yf.Ticker("GC=F")
@@ -84,51 +96,60 @@ def get_safe_historical_data():
     return df_fallback['Close'], True
 
 # ==========================================
-# 4. واجهة التطبيق والتحكم الرئيسي
+# 5. واجهة التطبيق والتحكم الرئيسي
 # ==========================================
 def main():
     init_db()
     views_count = update_and_get_views()
     
-    # رأس المنصة وعداد الزوار
     st.title("🏅 Gold Meter Pro - المنظومة التفاعلية الشاملة")
     st.caption(f"👁️ عدد زيارات المنصة: {views_count} زائر")
     
-    # جلب أسعار الذهب الفورية
     prices, gold_oz, usd_egp = get_market_data()
     
-    # --- التعديل الجديد: الشاشات اللحظية الكبرى والمؤشرات البنكية ---
     st.markdown("### 🌐 الشاشة اللحظية للمؤشرات العالمية والبنكية")
     macro_cols = st.columns(2)
     macro_cols[0].metric("🌟 شاشة أونصة الذهب عالمياً", f"${gold_oz:,.2f}", help="السعر الفوري المباشر للأوقية في البورصة العالمية")
     macro_cols[1].metric("🏦 سعر دولار البنك المركزي (EGP)", f"{usd_egp:.2f} ج.م", help="سعر صرف الدولار الرسمي مقابل الجنيه المصري")
     
-    st.write("") # مسافة جمالية
+    st.write("") 
     
-    # عرض صناديق العيارات المحلية
     st.markdown("### 💰 أسعار الذهب الحالية في مصر")
     cols = st.columns(4)
     cols[0].metric("عيار 24 (السبائك)", f"{prices['24']:,.2f} ج.م")
     cols[1].metric("عيار 22", f"{prices['22']:,.2f} ج.م")
-    cols[2].metric("عيار 21 (الأكثر طلباً)", f"{prices['21']:,.2f} ج.م")
+    cols[2].metric("عيار 21 (الأكثر طلباً)", f"{prices['21']:,.2f} ج.m")
     cols[3].metric("عيار 18 (المشغولات)", f"{prices['18']:,.2f} ج.م")
     
     st.divider()
     
-    # فحص محرك التنبيهات وإطلاق النوافذ التفاعلية (Toast Alerts)
+    # محرك التنبيهات الفوري الذكي
     conn = sqlite3.connect('gold_data.db')
-    df_users = pd.read_sql_query("SELECT * FROM users", conn)
+    df_active_alerts = pd.read_sql_query("SELECT * FROM gold_alerts WHERE triggered = 0", conn)
     conn.close()
     
-    if not df_users.empty:
-        for idx, row in df_users.iterrows():
+    if not df_active_alerts.empty:
+        for idx, row in df_active_alerts.iterrows():
             current_karat_price = prices.get(row['karat'], prices['21'])
+            is_fired = False
+            alert_msg = ""
+            
             if current_karat_price >= row['high']:
-                st.toast(f"🚨 إشارة بيع: عيار {row['karat']} وصل لهدف المستخدم {row['username']} الحالي ({row['high']} ج.م)!")
+                alert_msg = f"🚨 تنبيه صعود الذهب لـ {row['username']}!\nعيار {row['karat']} وصل إلى هدف البيع المستهدف: {row['high']} ج.م\nالسعر الحالي الآن: {current_karat_price:,.2f} ج.م"
+                is_fired = True
             elif current_karat_price <= row['low']:
-                st.toast(f"📉 إشارة شراء: عيار {row['karat']} هبط لهدف المستخدم {row['username']} الحالي ({row['low']} ج.م)!")
+                alert_msg = f"📉 تنبيه هبوط الذهب لـ {row['username']}!\nعيار {row['karat']} وصل إلى هدف الشراء المستهدف: {row['low']} ج.م\nالسعر الحالي الآن: {current_karat_price:,.2f} ج.م"
+                is_fired = True
+                
+            if is_fired:
+                st.toast(alert_msg)
+                send_telegram_message(row['tg_id'], alert_msg)
+                conn = sqlite3.connect('gold_data.db')
+                c = conn.cursor()
+                c.execute("UPDATE gold_alerts SET triggered = 1 WHERE id = ?", (row['id'],))
+                conn.commit()
+                conn.close()
 
-    # بناء تبويبات المنصة الخمسة الكاملة
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊 التحليل والبورصة", 
         "💡 التوصيات الذكية", 
@@ -137,7 +158,6 @@ def main():
         "❓ دليل المساعدة والدعم"
     ])
     
-    # تبويب 1: التحليل والبورصة
     with tab1:
         st.subheader("📈 أداء سعر الأوقية عالمياً بالدولار (مؤشر البورصة)")
         chart_data, is_fallback = get_safe_historical_data()
@@ -145,7 +165,6 @@ def main():
             st.info("⚠️ تظهر الآن بيانات بيانية تقريبية مؤقتاً نظراً لقيود التحديث الخارجي من خوادم البورصة العالمية. أسعارك الفورية بالأعلى دقيقة 100%.")
         st.line_chart(chart_data)
         
-    # تبويب 2: التوصيات الآلية
     with tab2:
         st.subheader("🤖 نظام التوصيات والتحليل الفني الآلي")
         if prices["21"] > 3800:
@@ -153,12 +172,10 @@ def main():
         else:
             st.success("✅ الأسعار الحالية مستقرة في مناطق دعم جيدة جداً. فرصة استثمارية ممتازة للشراء الآمن.")
             
-    # تبويب 3: الأخبار الحية المباشرة
     with tab3:
         st.subheader("📰 آخر مستجدات أسواق الذهب والاقتصاد العالمي")
         gold_news_url = "https://news.google.com/rss/search?q=%D8%A7%D9%84%D8%B0%D9%87%D8%A8&hl=ar&gl=EG&ceid=EG:ar"
         feed = feedparser.parse(gold_news_url)
-        
         if feed.entries:
             for entry in feed.entries[:6]:
                 st.markdown(f"🔹 **[{entry.title}]({entry.link})**")
@@ -166,35 +183,51 @@ def main():
         else:
             st.info("جاري مزامنة شريط الأخبار والتقارير الاقتصادية...")
             
-    # تبويب 4: سجل التنبيهات المخصص
+    # --- التعديل الجوهري هنا في تبويب 4 لإلغاء الـ Form وحل المشكلة ---
     with tab4:
         st.subheader("👤 تفعيل ومتابعة أهدافك السعرية الخاصة")
-        with st.form("user_alert_form"):
-            name = st.text_input("اسمك الكريم")
-            telegram_id = st.text_input("معرف التليجرام الخاص بك (Chat ID)")
-            selected_karat = st.selectbox("اختر عيار الذهب المراد مراقبته", ["24", "22", "21", "18"])
-            
-            high_target = st.number_input("تنبيه عند الارتفاع إلى (سعر المستهدف للبيع)", value=float(round(prices[selected_karat] + 150)))
-            low_target = st.number_input("تنبيه عند الانخفاض إلى (سعر المستهدف للشراء)", value=float(round(prices[selected_karat] - 150)))
-            
-            if st.form_submit_button("تفعيل التنبيه المخصّص"):
-                if name and telegram_id:
-                    conn = sqlite3.connect('gold_data.db')
-                    c = conn.cursor()
-                    c.execute("""INSERT OR REPLACE INTO users (username, tg_id, karat, high, low) 
-                                 VALUES (?, ?, ?, ?, ?)""", (name, telegram_id, selected_karat, high_target, low_target))
-                    conn.commit()
-                    conn.close()
-                    st.success(f"🎯 تم بنجاح رصد أهدافك لعيار {selected_karat}! سيعمل النظام التفاعلي على فحصها باستمرار.")
-                    st.rerun()
-                else:
-                    st.error("الرجاء إدخال الاسم ومعرف تليجرام لحفظ الإعدادات بالخادم المحلي.")
+        
+        # حقول الإدخال الحرة والتفاعلية بالكامل
+        name = st.text_input("اسمك الكريم", key="input_username")
+        telegram_id = st.text_input("معرف التليجرام الخاص بك (Chat ID)", key="input_tgid")
+        selected_karat = st.selectbox("اختر عيار الذهب المراد مراقبته", ["24", "22", "21", "18"], key="input_karat")
+        
+        # الحساب اللحظي للديفولت التفاعلي بمجرد تغيير اختيار العيار
+        default_high = float(round(prices[selected_karat] + 150))
+        default_low = float(round(prices[selected_karat] - 150))
+        
+        high_target = st.number_input("تنبيه عند الارتفاع إلى (سعر المستهدف للبيع)", value=default_high, key="input_high")
+        low_target = st.number_input("تنبيه عند الانخفاض إلى (سعر المستهدف للشراء)", value=default_low, key="input_low")
+        
+        # زر التفعيل المباشر
+        if st.button("🚀 تفعيل التنبيه المخصّص وإرسال اختبار لهاتفك"):
+            if name and telegram_id:
+                conn = sqlite3.connect('gold_data.db')
+                c = conn.cursor()
+                c.execute("""INSERT OR REPLACE INTO gold_alerts (username, tg_id, karat, high, low, triggered) 
+                             VALUES (?, ?, ?, ?, ?, 0)""", (name, telegram_id, selected_karat, high_target, low_target))
+                conn.commit()
+                conn.close()
+                
+                # إرسال رسالة ترحيبية فورية للتأكد من نجاح الاتصال بالهاتف
+                welcome_msg = f"🔔 مرحباً {name}! تم ربط حسابك بنجاح بـ Gold Meter.\nمراقبة نشطة لعيار {selected_karat}\nمستهدف البيع: {high_target} ج.م\nمستهدف الشراء: {low_target} ج.م"
+                send_telegram_message(telegram_id, welcome_msg)
+                
+                st.success(f"🎯 تم بنجاح رصد أهدافك لعيار {selected_karat}! وتم إرسال رسالة تأكيد على حسابك في تليجرام.")
+                st.rerun()
+            else:
+                st.error("الرجاء إدخال الاسم ومعرف تليجرام لحفظ الإعدادات بالخادم المحلي.")
 
-        if not df_users.empty:
-            st.write("📋 **قائمة طلبات مراقبة السوق النشطة:**")
-            st.dataframe(df_users[['username', 'karat', 'high', 'low']], use_container_width=True)
+        # عرض جدول لوحة التحكم والمشتركين الحاليين
+        conn = sqlite3.connect('gold_data.db')
+        df_all = pd.read_sql_query("SELECT * FROM gold_alerts", conn)
+        conn.close()
+        
+        if not df_all.empty:
+            st.write("📋 **شاشة مراقبة الطلبات النشطة في السيرفر:**")
+            df_all['الحالة'] = df_all['triggered'].apply(lambda x: "🟢 نشط ويراقب السوق" if x == 0 else "📬 تم إرسال التنبيه لهاتفك")
+            st.dataframe(df_all[['username', 'karat', 'high', 'low', 'الحالة']], use_container_width=True)
 
-    # تبويب 5: دليل المساعدة والدعم الشامل
     with tab5:
         st.header("❓ دليل استخدام وإعداد منصة Gold Meter")
         st.write("مرحباً بك في لوحة المساعدة لمساعدتك في تهيئة حسابك وربط الأنظمة التفاعلية بشكل صحيح تماماً.")
@@ -226,10 +259,9 @@ def main():
         with st.expander("هل هناك أي رسوم على تفعيل خدمات التنبيه داخل الموقع؟"):
             st.write("الخدمة مجانية بالكامل ومطورة برمجياً لخدمة كافة المهتمين بأسواق الذهب وتداول العملات في مصر بشكل لحظي ودقيق.")
             
-        with st.expander("الموقع يخبرني بوجود قيود تحديث في البورصة، فما السبب?"):
+        with st.expander("الموقع يخبرني بوجود قيود تحديث في البورصة، فما السبب؟"):
             st.write("هذا يعني أن خوادم البورصة العالمية (Yahoo Finance) تفرض حظراً مؤقتاً على طلبات المنصات السحابية. لا داعي للقلق، فالأسعار اللحظية بالمنصة تعمل من سيرفرات منفصلة ومستقرة تماماً.")
 
-    # تذييل الصفحة الرسمي بالحقوق المطلوبة
     st.markdown("<br><hr>", unsafe_allow_html=True)
     st.markdown("<div style='text-align:center; color:gray; font-size:14px;'>"
                 "© Techno logic 2026. Haytham Elsaadany"
