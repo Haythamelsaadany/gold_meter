@@ -15,7 +15,7 @@ st.markdown("""
     .price-card { background-color: #1e2430; padding: 15px; border-radius: 10px; border-left: 4px solid #D4AF37; text-align: center; }
     .price-card h3 { margin: 8px 0 0 0; color: #ffffff; font-size: 22px; }
     .price-card h5 { margin: 0; color: #D4AF37; font-size: 14px; }
-    .source-text { font-size: 12px; color: #888888; text-align: center; margin-top: 5px; }
+    .source-text { font-size: 12px; color: #00ffcc; text-align: center; margin-top: 5px; font-weight: bold; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -53,65 +53,57 @@ if engine:
         pass
 
 # ==========================================
-# 3. محرك جلب الأسعار اللحظي متعدد المصادر (محمي بكاش 5 دقائق)
+# 3. محرك ياهو فاينانس اللحظي بالثانية (كاش 10 ثوانٍ فقط لمنع الجاب)
 # ==========================================
-@st.cache_data(ttl=300)
-def fetch_live_prices_from_exchanges():
-    # المصادر الافتراضية كخط دفاع أخير في حال انقطاع الإنترنت
+@st.cache_data(ttl=10)
+def fetch_yahoo_realtime_prices():
+    # قيم احتياطية صارمة في حال حدوث أي انقطاع مؤقت في الشبكة
     ounce_usd = 3976.40
     usd_egp = 49.23
-    sources_used = []
+    sources = []
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
 
-    # أ. سحب سعر الدولار مقابل الجنيه لحظياً من البورصة العالمية المفتوحة
+    # أ. سحب سعر أونصة الذهب الفوري (Spot Gold) مباشرة
     try:
-        req_currency = requests.get("https://open.er-api.com/v6/latest/USD", timeout=5)
-        if req_currency.status_code == 200:
-            rates = req_currency.json().get("rates", {})
-            if "EGP" in rates:
-                usd_egp = round(rates["EGP"], 2)
-                sources_used.append("OpenExchange (USD/EGP)")
+        url_gold = "https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD=X?interval=1m&range=1d"
+        res_gold = requests.get(url_gold, headers=headers, timeout=7)
+        if res_gold.status_code == 200:
+            json_data = res_gold.json()
+            live_price = json_data['chart']['result'][0]['meta']['regularMarketPrice']
+            ounce_usd = float(live_price)
+            sources.append("Yahoo Gold Spot (XAU/USD)")
     except Exception:
         pass
 
-    # ب. سحب سعر أونصة الذهب - المصدر الأول الاحترافي (إذا وفرت تتوكن في الـ Secrets)
-    gold_api_key = st.secrets.get("GOLD_API_KEY")
-    if gold_api_key:
-        try:
-            headers = {'x-access-token': gold_api_key}
-            req_gold_api = requests.get("https://www.goldapi.io/api/XAU/USD", headers=headers, timeout=5)
-            if req_gold_api.status_code == 200:
-                price = req_gold_api.json().get("price")
-                if price:
-                    ounce_usd = float(price)
-                    sources_used.append("GoldAPI.io (XAU)")
-        except Exception:
-            pass
+    # ب. سحب سعر الدولار مقابل الجنيه اللحظي الحقيقي
+    try:
+        url_egp = "https://query1.finance.yahoo.com/v8/finance/chart/USDEGP=X?interval=1m&range=1d"
+        res_egp = requests.get(url_egp, headers=headers, timeout=7)
+        if res_egp.status_code == 200:
+            json_data = res_egp.json()
+            live_rate = json_data['chart']['result'][0]['meta']['regularMarketPrice']
+            usd_egp = float(live_rate)
+            sources.append("Yahoo Forex (USD/EGP)")
+    except Exception:
+        pass
 
-    # ج. سحب سعر أونصة الذهب - المصدر الثاني المفتوح (CoinGecko PAXG المربوط بالذهب الفعلي)
-    if len(sources_used) < 2:  # إذا لم يعمل المصدر الأول أو لزيادة التأكيد
-        try:
-            req_gecko = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=pax-gold&vs_currencies=usd", timeout=5)
-            if req_gecko.status_code == 200:
-                gecko_price = req_gecko.json().get("pax-gold", {}).get("usd")
-                if gecko_price:
-                    ounce_usd = float(gecko_price)
-                    sources_used.append("CoinGecko Live Spot")
-        except Exception:
-            pass
+    source_name = " | ".join(sources) if sources else "البيانات الاحتياطية الثابتة"
+    return ounce_usd, usd_egp, source_name
 
-    return ounce_usd, usd_egp, " | ".join(sources_used) if sources_used else "Fallback Static Data"
+# جلب البيانات الحية فورا
+ounce_usd, usd_egp, data_source = fetch_yahoo_realtime_prices()
 
-# تشغيل الفحص اللحظي للمحرك الجديد
-ounce_usd, usd_egp, data_source = fetch_live_prices_from_exchanges()
-
-# الحسابات الرياضية الدقيقة المبنية على بيانات البورصة الحية
+# الحسابات الرياضية الدقيقة المبنية على بيانات البورصة الحية بالثانية
 gold_pure_price_egp = (ounce_usd * usd_egp) / 31.10348
 price_24 = round(gold_pure_price_egp, 2)
 price_21 = round(gold_pure_price_egp * (21 / 24), 2)
 price_18 = round(gold_pure_price_egp * (18 / 24), 2)
 
 # عرض الـ 5 كروت كاملة شاملة عيار 24
-st.subheader("📈 أسعار الذهب والدولار الحية مباشرة من البورصة")
+st.subheader("📈 أسعار الذهب والدولار الحية مباشرة من البورصة العالمية")
 c1, c2, c3, c4, c5 = st.columns(5)
 with c1:
     st.markdown(f'<div class="price-card"><h5>🌍 أونصة الذهب</h5><h3>${ounce_usd:,.2f}</h3></div>', unsafe_allow_html=True)
@@ -124,7 +116,7 @@ with c4:
 with c5:
     st.markdown(f'<div class="price-card"><h5>⚜️ عيار 18</h5><h3>{price_18:,.2f} ج.م</h3></div>', unsafe_allow_html=True)
 
-st.markdown(f'<div class="source-text">📡 مصادر البيانات النشطة حالياً: {data_source}</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="source-text">📡 المصدر الفوري الحالي: {data_source} (تحديث كل 10 ثوانٍ تلقائياً)</div>', unsafe_allow_html=True)
 st.divider()
 
 # ==========================================
@@ -183,7 +175,7 @@ with col_actions:
             st.error("❌ فشل الإرسال، تحقق من توكن التليجرام في الـ Secrets.")
 
     if st.button("🔍 فحص التنبيهات يدوياً الآن"):
-        st.cache_data.clear() # تفريغ الكاش مؤقتاً عند طلب الفحص اليدوي لجلب أحدث سعر بالثانية
+        st.cache_data.clear() # تصفير الكاش فوراً عند الفحص اليدوي لجلب السعر الحالي بالثانية تماماً
         if engine:
             try:
                 df_active = pd.read_sql_query("SELECT * FROM gold_targets WHERE is_active = TRUE", engine)
@@ -202,7 +194,6 @@ with col_actions:
                         current_local_price = price_24 if c_type == "عيار 24" else (price_21 if c_type == "عيار 21" else price_18)
                         
                         condition_met = False
-                        # فحص دقيق للشرط الرياضي التلقائي
                         if "بيع" in t_type and current_local_price >= t_price:
                             condition_met = True
                         elif "شراء" in t_type and current_local_price <= t_price:
