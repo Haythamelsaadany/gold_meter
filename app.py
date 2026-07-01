@@ -264,3 +264,6 @@ if engine:
             st.info("الداتا بيز فارغة حالياً.")
     except Exception as e:
         st.error(f"❌ تعذر جلب السجل: {e}")
+import time
+time.sleep(30) # انتظر 30 ثانية بعد ما ترسم الشاشة بالكامل
+st.rerun()     # أعد تشغيل الاسكربت تلقائياً لتحديث الأسعار
