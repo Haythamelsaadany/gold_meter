@@ -6,36 +6,35 @@ import datetime
 import time
 
 # ==========================================
-# 1. إعدادات الواجهة الاحترافية المحدثة بالكامل
+# 1. إعدادات الواجهة والـ CSS الاحترافي
 # ==========================================
 st.set_page_config(page_title="Gold Meter Pro", page_icon="🏅", layout="wide")
 
-# هندسة الـ CSS لمنع أي تداخل وتحسين التباين والقراءة 100%
 st.markdown("""
-    <style>
-    .main-title { font-size: 32px; font-weight: bold; text-align: center; color: #D4AF37; margin-bottom: 20px; }
-    
-    /* كروت الأسعار العلوية */
-    .price-card { background-color: #1e2430; padding: 15px; border-radius: 10px; border-left: 4px solid #D4AF37; text-align: center; }
-    .price-card h3 { margin: 8px 0 0 0; color: #ffffff; font-size: 22px; font-weight: bold; }
-    .price-card h5 { margin: 0; color: #D4AF37; font-size: 14px; font-weight: bold; }
-    
-    /* كروت الأخبار والتوصيات الفنية بدعم كامل للغة العربية */
-    .news-box { background-color: #111622; padding: 18px; border-radius: 8px; margin-bottom: 12px; border-right: 4px solid #00ffcc; color: #ffffff; direction: rtl; text-align: right; }
-    .news-box-title { color: #00ffcc; font-size: 16px; font-weight: bold; margin-bottom: 8px; }
-    .news-box-text { color: #f0f4f8; font-size: 14px; line-height: 1.6; margin-bottom: 5px; }
-    .news-box-date { color: #a0aec0; font-size: 12px; display: block; margin-top: 5px; }
-    
-    .rec-box { background-color: #111622; padding: 18px; border-radius: 8px; margin-bottom: 12px; border-right: 4px solid #D4AF37; color: #ffffff; direction: rtl; text-align: right; }
-    .rec-box-title { color: #D4AF37; font-size: 16px; font-weight: bold; margin-bottom: 8px; }
-    .rec-box-text { color: #f0f4f8; font-size: 14px; line-height: 1.6; }
-    .highlight-green { color: #00ffcc; font-weight: bold; }
-    .highlight-white { color: #ffffff; font-weight: bold; }
-    
-    .source-text { font-size: 13px; color: #00ffcc; text-align: center; margin-top: 5px; font-weight: bold; }
-    .warning-text { font-size: 13px; color: #ffcc00; text-align: center; margin-top: 5px; font-weight: bold; }
-    .trend-text { font-size: 16px; font-weight: bold; text-align: center; margin-top: -10px; margin-bottom: 15px; }
-    </style>
+<style>
+.main-title { font-size: 32px; font-weight: bold; text-align: center; color: #D4AF37; margin-bottom: 20px; }
+
+/* كروت الأسعار العلوية */
+.price-card { background-color: #1e2430; padding: 15px; border-radius: 10px; border-left: 4px solid #D4AF37; text-align: center; }
+.price-card h3 { margin: 8px 0 0 0; color: #ffffff; font-size: 22px; font-weight: bold; }
+.price-card h5 { margin: 0; color: #D4AF37; font-size: 14px; font-weight: bold; }
+
+/* كروت الأخبار والتوصيات الفنية بدعم كامل للغة العربية */
+.news-box { background-color: #111622; padding: 18px; border-radius: 8px; margin-bottom: 12px; border-right: 4px solid #00ffcc; color: #ffffff; direction: rtl; text-align: right; }
+.news-box-title { color: #00ffcc; font-size: 16px; font-weight: bold; margin-bottom: 8px; }
+.news-box-text { color: #f0f4f8; font-size: 14px; line-height: 1.6; margin-bottom: 5px; }
+.news-box-date { color: #a0aec0; font-size: 12px; display: block; margin-top: 5px; }
+
+.rec-box { background-color: #111622; padding: 18px; border-radius: 8px; margin-bottom: 12px; border-right: 4px solid #D4AF37; color: #ffffff; direction: rtl; text-align: right; }
+.rec-box-title { color: #D4AF37; font-size: 16px; font-weight: bold; margin-bottom: 8px; }
+.rec-box-text { color: #f0f4f8; font-size: 14px; line-height: 1.6; }
+.highlight-green { color: #00ffcc; font-weight: bold; }
+.highlight-white { color: #ffffff; font-weight: bold; }
+
+.source-text { font-size: 13px; color: #00ffcc; text-align: center; margin-top: 5px; font-weight: bold; }
+.warning-text { font-size: 13px; color: #ffcc00; text-align: center; margin-top: 5px; font-weight: bold; }
+.trend-text { font-size: 16px; font-weight: bold; text-align: center; margin-top: -10px; margin-bottom: 15px; }
+</style>
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-title">🏅 منظومة الذهب الذكية - Gold Meter Pro</div>', unsafe_allow_html=True)
@@ -72,7 +71,7 @@ if engine:
         pass
 
 # ==========================================
-# 3. محرك الأسعار المطور اللحظي وسحب الـ High & Low حركياً
+# 3. محرك الأسعار المطور وسحب الـ High & Low
 # ==========================================
 @st.cache_data(ttl=30)
 def fetch_realtime_prices_with_failover():
@@ -88,7 +87,7 @@ def fetch_realtime_prices_with_failover():
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     }
 
-    # [المسار الأول]: ياهو فاينانس - سحب السعر اللحظي وأعلى/أقل نقطة لليوم
+    # [المسار الأول]: ياهو فاينانس - السعر اللحظي وأعلى وأقل نقطة لليوم حركياً
     try:
         url_gold = "https://query2.finance.yahoo.com/v8/finance/chart/XAUUSD=X?interval=1m&range=1d"
         res_gold = requests.get(url_gold, headers=headers, timeout=4)
@@ -96,7 +95,6 @@ def fetch_realtime_prices_with_failover():
             json_data = res_gold.json()
             ounce_usd = float(json_data['chart']['result'][0]['meta']['regularMarketPrice'])
             
-            # استخراج أعلى وأقل سعر بأمان لتجنب الـ None القيم الفارغة
             quote_data = json_data['chart']['result'][0]['indicators']['quote'][0]
             valid_highs = [h for h in quote_data.get('high', []) if h is not None]
             valid_lows = [l for l in quote_data.get('low', []) if l is not None]
@@ -153,7 +151,7 @@ price_21 = round(gold_pure_price_egp * (21 / 24), 2)
 price_18 = round(gold_pure_price_egp * (18 / 24), 2)
 
 # ==========================================
-# 4. حساب مؤشر الاتجاه (Trend Indicator)
+# 4. مؤشر اتجاه السعر (Trend Indicator)
 # ==========================================
 if 'last_price' not in st.session_state:
     st.session_state.last_price = ounce_usd
@@ -168,7 +166,7 @@ else:
 st.session_state.last_price = ounce_usd
 
 # ==========================================
-# 5. اللوحة الجانبية: الحاسبات الاستثمارية الذكية
+# 5. اللوحة الجانبية (Sidebar)
 # ==========================================
 with st.sidebar:
     st.markdown("### 🧮 حاسبة الاستثمار السريع")
@@ -204,7 +202,7 @@ with st.sidebar:
     st.caption("تم التطوير بواسطة م/ هيثم السعدني لمنظومة Gold Meter Pro")
 
 # ==========================================
-# 6. تقسيم التطبيق إلى تابات احترافية (Tabs)
+# 6. تقسيم التطبيق إلى تابات (Tabs)
 # ==========================================
 tab_monitor, tab_news, tab_zakat, tab_telegram_setup = st.tabs([
     "📊 شاشة المراقبة والتنبيهات", 
@@ -234,7 +232,7 @@ with tab_monitor:
     if is_live:
         st.markdown(f'<div class="source-text">📡 المصدر النشط: {data_source} (تحديث تلقائي مستمر كل 30 ثانية)</div>', unsafe_allow_html=True)
     else:
-        st.markdown(f'<div class="warning-text">⚠️ وضع الأمان نشط (لمنع الفجوات السعرية). تفاصيل: {error_msg}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="warning-text">⚠️ وضع الأمان نشط. تفاصيل: {error_msg}</div>', unsafe_allow_html=True)
 
     st.divider()
 
@@ -331,12 +329,12 @@ with tab_monitor:
                     st.error(f"❌ خطأ أثناء الفحص: {e}")
 
 # ------------------------------------------
-# محتوى التاب الثاني: الأخبار والتوصيات الاحترافية (تم حل البج المالي والبصري)
+# محتوى التاب الثاني: الأخبار والتوصيات (بدون مسافات بادئة مطلقاً لمنع البج البصري)
 # ------------------------------------------
 with tab_news:
     st.subheader("📰 شريط أخبار وتوصيات الذهب الفنية اللحظية")
     
-    # [تطبيق المعادلة الكلاسيكية للارتكاز والدعم والمقاومة الفنية]
+    # حساب المعادلات الفنية الكلاسيكية الحقيقية
     pivot_global = round((day_high + day_low + ounce_usd) / 3, 2)
     support_global = round((2 * pivot_global) - day_high, 2)
     resistance_global = round((2 * pivot_global) - day_low, 2)
@@ -346,53 +344,40 @@ with tab_news:
 
     col_news_left, col_news_right = st.columns(2)
     
-    # طباعة كروت الـ HTML من اليسار لليمين بدون مسافات بادئة لمنع تحولها لصندوق كود
     with col_news_left:
         st.markdown("### 🌍 آخر المستجدات والتقارير")
         
-        html_news_1 = f"""
-<div class="news-box">
-    <div class="news-box-title">📢 حركة الأونصة العالمية الآن</div>
-    <div class="news-box-text">تتحرك الأونصة العالمية الآن في مدى يومي بين أقل سعر <span class="highlight-white">${day_low:,.2f}</span> وأعلى سعر <span class="highlight-white">${day_high:,.2f}</span>، السعر اللحظي الحالي هو <b>${ounce_usd:,.2f}</b>.</div>
-    <span class="news-box-date">📅 تحديث: لحظي متزامن</span>
-</div>
-        """
+        html_news_1 = f"""<div class="news-box">
+<div class="news-box-title">📢 حركة الأونصة العالمية الآن</div>
+<div class="news-box-text">تتحرك الأونصة العالمية الآن في مدى يومي بين أقل سعر <span class="highlight-white">${day_low:,.2f}</span> وأعلى سعر <span class="highlight-white">${day_high:,.2f}</span>، السعر اللحظي الحالي هو <b>${ounce_usd:,.2f}</b>.</div>
+<span class="news-box-date">📅 تحديث: لحظي متزامن</span>
+</div>"""
         st.markdown(html_news_1, unsafe_allow_html=True)
 
-        html_news_2 = f"""
-<div class="news-box">
-    <div class="news-box-title">🏦 استقرار سعر الصرف المحلي</div>
-    <div class="news-box-text">استقرار تام لأسعار الصرف الرسمية للدولار عند مستويات <b>{usd_egp} ج.م</b>، مما يحمي السوق المحلي من القفزات العشوائية المفاجئة ويدعم استقرار التسعير.</div>
-    <span class="news-box-date">📅 تحديث: منذ ساعة</span>
-</div>
-        """
+        html_news_2 = f"""<div class="news-box">
+<div class="news-box-title">🏦 استقرار سعر الصرف المحلي</div>
+<div class="news-box-text">استقرار تام لأسعار الصرف الرسمية للدولار عند مستويات <b>{usd_egp} ج.م</b>، مما يحمي السوق المحلي من القفزات العشوائية المفاجئة ويدعم استقرار التسعير.</div>
+<span class="news-box-date">📅 تحديث: منذ ساعة</span>
+</div>"""
         st.markdown(html_news_2, unsafe_allow_html=True)
         
     with col_news_right:
         st.markdown("### 🎯 التوصيات الحسابية (معادلات بورصة الذهب الكلاسيكية)")
         
-        html_rec_1 = f"""
-<div class="rec-box">
-    <div class="rec-box-title">🎯 نقطة الارتكاز المرجعية الحركية لليوم (Pivot Point)</div>
-    <div class="rec-box-text">مستوى الارتكاز المعتمد حسابياً الآن: <span class="highlight-green">${pivot_global:,.2f}</span></div>
-    
-    <div class="rec-box-title" style="margin-top:12px;">📉 مستويات الدعم الفني الحقيقي (فرص الشراء)</div>
-    <div class="rec-box-text">• عالمياً: <b>${support_global:,.2f}</b><br>
-    • يعادل محلياً لعيار 21: <span class="highlight-green">{support_egp_21:,.2f} ج.م</span></div>
-    
-    <div class="rec-box-title" style="margin-top:12px;">📈 مستويات المقاومة الفنية الحقيقية (أهداف البيع)</div>
-    <div class="rec-box-text">• عالمياً: <b>${resistance_global:,.2f}</b><br>
-    • يعادل محلياً لعيار 21: <span class="highlight-green">{resistance_egp_21:,.2f} ج.م</span></div>
-</div>
-        """
+        html_rec_1 = f"""<div class="rec-box">
+<div class="rec-box-title">🎯 نقطة الارتكاز المرجعية الحركية لليوم (Pivot Point)</div>
+<div class="rec-box-text">مستوى الارتكاز المعتمد حسابياً الآن: <span class="highlight-green">${pivot_global:,.2f}</span></div>
+<div class="rec-box-title" style="margin-top:12px;">📉 مستويات الدعم الفني الحقيقي (فرص الشراء)</div>
+<div class="rec-box-text">• عالمياً: <b>${support_global:,.2f}</b><br>• يعادل محلياً لعيار 21: <span class="highlight-green">{support_egp_21:,.2f} ج.م</span></div>
+<div class="rec-box-title" style="margin-top:12px;">📈 مستويات المقاومة الفنية الحقيقية (أهداف البيع)</div>
+<div class="rec-box-text">• عالمياً: <b>${resistance_global:,.2f}</b><br>• يعادل محلياً لعيار 21: <span class="highlight-green">{resistance_egp_21:,.2f} ج.م</span></div>
+</div>"""
         st.markdown(html_rec_1, unsafe_allow_html=True)
 
-        html_rec_2 = f"""
-<div class="rec-box">
-    <div class="rec-box-title">💡 نصيحة الاستثمار المبنية على مؤشر التقلب اليومي</div>
-    <div class="rec-box-text">بناءً على النطاق السعري لليوم، يفضل تفعيل تنبيهات الشراء التلقائية عند اقتراب السعر المحلي من نقطة الدعم المحسوبة لتضمن الدخول بأفضل سعر تكلفة ممكن.</div>
-</div>
-        """
+        html_rec_2 = f"""<div class="rec-box">
+<div class="rec-box-title">💡 نصيحة الاستثمار المبنية على مؤشر التقلب اليومي</div>
+<div class="rec-box-text">بناءً على النطاق السعري لليوم، يفضل تفعيل تنبيهات الشراء التلقائية عند اقتراب السعر المحلي من نقطة الدعم المحسوبة لتضمن الدخول بأفضل سعر تكلفة ممكن.</div>
+</div>"""
         st.markdown(html_rec_2, unsafe_allow_html=True)
 
 # ------------------------------------------
@@ -427,7 +412,7 @@ with tab_zakat:
             st.metric(label="💰 القيمة السعرية الحالية لذهبك:", value=f"{current_val:,.2f} ج.م")
 
 # ------------------------------------------
-# محتوى التاب الرابع: دليل تشغيل وإعداد تليجرام الشامل
+# محتوى التاب الرابع: دليل تشغيل وإعداد تليجرام
 # ------------------------------------------
 with tab_telegram_setup:
     st.subheader("🛠️ الدليل الشامل لربط واستخراج بيانات التليجرام")
