@@ -19,7 +19,8 @@ st.markdown("""
     .source-text { font-size: 13px; color: #00ffcc; text-align: center; margin-top: 5px; font-weight: bold; }
     .warning-text { font-size: 13px; color: #ffcc00; text-align: center; margin-top: 5px; font-weight: bold; }
     .news-card { background-color: #1a1f2c; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-right: 4px solid #00ffcc; }
-    .rec-card { background-color: #1a1f2c; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-right: 4px solid #ffcc00; }
+    .rec-card { background-color: #1a1f2c; padding: 15px; border-radius: 8px; margin-bottom: 10px; border-right: 4px solid #D4AF37; }
+    .trend-text { font-size: 16px; font-weight: bold; text-align: center; margin-top: -10px; margin-bottom: 15px; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -125,15 +126,53 @@ price_21 = round(gold_pure_price_egp * (21 / 24), 2)
 price_18 = round(gold_pure_price_egp * (18 / 24), 2)
 
 # ==========================================
-# 4. تقسيم التطبيق إلى تابات احترافية (Tabs) لمنع التكديس
+# 4. ترقية: حساب مؤشر الاتجاه (Trend Indicator) عبر الـ Session State
 # ==========================================
-tab_monitor, tab_news = st.tabs(["📊 شاشة المراقبة والتنبيهات", "📰 الأخبار والتوصيات الفنية"])
+if 'last_price' not in st.session_state:
+    st.session_state.last_price = ounce_usd
+
+if ounce_usd > st.session_state.last_price:
+    trend_markup = f'<div class="trend-text" style="color:#00ffcc;">📈 حركة السعر الحالية: صعود (+${round(ounce_usd - st.session_state.last_price, 2)}) مقارنة بالقراءة السابقة</div>'
+elif ounce_usd < st.session_state.last_price:
+    trend_markup = f'<div class="trend-text" style="color:#ff3333;">📉 حركة السعر الحالية: هبوط (-${round(st.session_state.last_price - ounce_usd, 2)}) مقارنة بالقراءة السابقة</div>'
+else:
+    trend_markup = f'<div class="trend-text" style="color:#ffcc00;">➡️ حركة السعر الحالية: استقرار ثبات سعري لحظي</div>'
+
+st.session_state.last_price = ounce_usd
+
+# ==========================================
+# 5. ترقية: لوحة جانبية ذكية (Sidebar Calculator) لرفع جودة الـ UI
+# ==========================================
+with st.sidebar:
+    st.markdown("### 🧮 حاسبة الاستثمار السريع")
+    st.write("احسب تقدر تشتري كام جرام بميزانيتك الحالية:")
+    user_budget = st.number_input("أدخل المبلغ المتوفر (ج.م):", value=50000, step=5000)
+    
+    calc_24 = round(user_budget / price_24, 2) if price_24 > 0 else 0
+    calc_21 = round(user_budget / price_21, 2) if price_21 > 0 else 0
+    calc_18 = round(user_budget / price_18, 2) if price_18 > 0 else 0
+    
+    st.info(f"🏆 **عيار 24:** يعادل حوالي `{calc_24}` جرام")
+    st.success(f"✨ **عيار 21:** يعادل حوالي `{calc_21}` جرام")
+    st.warning(f"⚜️ **عيار 18:** يعادل حوالي `{calc_18}` جرام")
+    st.divider()
+    st.caption("تم التطوير بواسطة م/ هيثم الصعيدي لمنظومة Gold Meter Pro")
+
+# ==========================================
+# 6. تقسيم التطبيق إلى تابات احترافية (Tabs)
+# ==========================================
+tab_monitor, tab_news, tab_telegram_setup = st.tabs([
+    "📊 شاشة المراقبة والتنبيهات", 
+    "📰 الأخبار والتوصيات الرياضية الفنية", 
+    "🛠️ دليل تشغيل بوت التليجرام"
+])
 
 # ------------------------------------------
 # محتوى التاب الأول: الشاشة الرئيسية والتنبيهات
 # ------------------------------------------
 with tab_monitor:
-    st.subheader("📈 أسعار الذهب والدولار اللحظية")
+    st.markdown(trend_markup, unsafe_allow_html=True)
+    
     c1, c2, c3, c4, c5 = st.columns(5)
     with c1:
         st.markdown(f'<div class="price-card"><h5>🌍 أونصة الذهب</h5><h3>${ounce_usd:,.2f}</h3></div>', unsafe_allow_html=True)
@@ -163,17 +202,7 @@ with tab_monitor:
         current_selected_price = price_24 if carat_choice == "عيار 24" else (price_21 if carat_choice == "عيار 21" else price_18)
         target_price = st.number_input(f"سعر الهدف المطلوب (الحالي: {current_selected_price}):", value=float(current_selected_price), step=5.0)
         
-        # حقل استلام معرف التليجرام وجواره طريقة الاستخراج مباشرة
         user_chat_id = st.text_input("Telegram Chat ID:", value="452445185")
-        
-        # [إعادة ميزة]: طريقة استخراج آي دي البوت مدمجة بشكل نظيف
-        with st.expander("ℹ️ كيف تستخرج الـ Chat ID الخاص بك؟"):
-            st.markdown("""
-            1. افتح تطبيق تليجرام وابحث عن البوت العالمي: `@userinfobot` أو `@GetChatID_Bot`.
-            2. اضغط على **Start** أو أرسل له أي رسالة عشوائية.
-            3. سيرد عليك بـ **Id** مكون من أرقام (مثل: `452445185`).
-            4. قم بنسخ هذا الرقم ووضعه في الخانة أعلاه لاستقبال التنبيهات الفورية!
-            """)
 
         if st.button("💾 حفظ هدف التنبيه"):
             if engine:
@@ -187,6 +216,8 @@ with tab_monitor:
                             {"carat": carat_choice, "type": target_type, "price": target_price, "chat_id": user_chat_id}
                         )
                     st.success(f"✅ تم حفظ هدف الـ {target_type} بنجاح!")
+                    st.json({"status": "success", "target": target_price})
+                    time.sleep(1)
                     st.rerun()
                 except Exception as e:
                     st.error(f"❌ فشل الحفظ: {e}")
@@ -207,9 +238,9 @@ with tab_monitor:
         st.subheader("⚡ العمليات وفحص التنبيهات")
         
         if st.button("🔔 اختبار اتصال البوت"):
-            test_msg = f"🔔 *Gold Meter Pro*\nاتصال البوت ممتاز وشغال يا هندسة! 🚀"
+            test_msg = f"🔔 *Gold Meter Pro*\nاتصال البوت ممتاز وشغال يا هندسة ومستعد للمراقبة أثناء الإجازة! 🏖️"
             if send_telegram_msg(user_chat_id, test_msg):
-                st.success("🎯 تم إرسال رسالة الاختبار بنجاح!")
+                st.success("🎯 تم إرسال رسالة الاختبار بنجاح للتليجرام!")
             else:
                 st.error("❌ فشل الإرسال، تحقق من الـ Secrets.")
 
@@ -271,40 +302,81 @@ with tab_monitor:
             pass
 
 # ------------------------------------------
-# [إعادة ميزة]: محتوى التاب الثاني: الأخبار والتوصيات الفنية
+# محتوى التاب الثاني: الأخبار والتوصيات الفنية (ترقية الحساب الديناميكي)
 # ------------------------------------------
 with tab_news:
-    st.subheader("📰 شريط أخبار الذهب العالمي والمحلي")
+    st.subheader("📰 شريط أخبار الذهب الفني")
     
+    # حساب نقاط الدعم والمقاومة ديناميكياً بناء على السعر اللحظي الحالي للأونصة
+    pivot_global = ounce_usd
+    support_global = round(ounce_usd - 20, 2)
+    resistance_global = round(ounce_usd + 20, 2)
+    
+    # حساب الدعم والمقاومة محلياً لعيار 21 لتعود بالفائدة الفورية للمستخدم
+    support_egp_21 = round((support_global * usd_egp * 21/24) / 31.10348, 2)
+    resistance_egp_21 = round((resistance_global * usd_egp * 21/24) / 31.10348, 2)
+
     col_news_left, col_news_right = st.columns(2)
     
     with col_news_left:
         st.markdown("### 🌍 آخر المستجدات والتقارير")
-        st.markdown("""
+        st.markdown(f"""
         <div class="news-card">
-            <h5>ثبات الأونصة العالمية فوق مستويات الـ 4000 دولار بانتظار بيانات التضخم الفيدرالي.</h5>
-            <small>📅 تحديث: منذ 10 دقائق</small>
+            <h5>ثبات الأونصة العالمية حول مستويات الـ {ounce_usd:,.2f}$ بانتظار إغلاق المحاضر الفيدرالية.</h5>
+            <small>📅 تحديث: لحظي مع الشاشة</small>
         </div>
         <div class="news-card">
-            <h5>تقارير أمريكية تشير إلى استقرار أسعار الصرف في السوق الموازي والبنك المركزي المصري.</h5>
+            <h5>استقرار تام لأسعار الصرف الرسمية عند مستويات {usd_egp} ج.م للدولار مما يدعم توازن السوق المحلي.</h5>
             <small>📅 تحديث: منذ ساعة</small>
         </div>
         """, unsafe_allow_html=True)
         
     with col_news_right:
-        st.markdown("### 🎯 التوصيات الفنية ونقاط الدعم والمقاومة")
+        st.markdown("### 🎯 التوصيات الرياضية الحسابية (تتغير ديناميكياً)")
         st.markdown(f"""
         <div class="rec-card">
-            <h5>🎯 <b>نقطة الارتكاز الحالية:</b> ${ounce_usd:,.2f}</h5>
-            <p><b>مستوى الدعم القادم:</b> $4,000 | <b>مستوى المقاومة الشرس:</b> $4,050</p>
+            <h5>🎯 <b>نقطة الارتكاز العالمية الحالية:</b> ${pivot_global:,.2f}</h5>
+            <p>📉 <b>مستوى الدعم العالمي (شراء):</b> ${support_global:,.2f} <br> 
+               ➡️ يعادل محلياً لعيار 21: <b>{support_egp_21:,.2f} ج.م</b></p>
+            <p>📈 <b>مستوى المقاومة العالمي (بيع):</b> ${resistance_global:,.2f} <br>
+               ➡️ يعادل محلياً لعيار 21: <b>{resistance_egp_21:,.2f} ج.م</b></p>
         </div>
         <div class="rec-card">
-            💡 <b>نصيحة الخبراء للمستثمرين:</b> يفضل الشراء على مراحل (متوسطات سعرية) عند ملامسة مستويات الدعم، وعدم الدخول بكامل رأس المال دفعة واحدة لضمان التحوط التام.
+            💡 <b>نصيحة المنظومة اللحظية:</b> السعر الحالي يعطي استقراراً نسبياً. يفضل دائماً الشراء التراكمي قرب نقاط الدعم المحسوبة أعلاه، وتفعيل التنبيه الآلي على التليجرام لضمان قنص الفرصة فوراً.
         </div>
         """, unsafe_allow_html=True)
 
+# ------------------------------------------
+# محتوى التاب الثالث: دليل تشغيل وإعداد تليجرام الشامل
+# ------------------------------------------
+with tab_telegram_setup:
+    st.subheader("🛠️ الدليل الشامل لربط واستخراج بيانات التليجرام")
+    
+    st.markdown("""
+    لضمان أن المنظومة تعمل وترسل لك الإشعارات على موبايلك أثناء تواجدك في المصيف، اتبع الآتي:
+    
+    ### 1️⃣ أولاً: استخراج الـ Chat ID الخاص بك (مجاني تماماً)
+    * افتح تطبيق تليجرام في الموبايل أو الكمبيوتر.
+    * في خانة البحث أكتب اسم البوت العالمي الموثق: `@userinfobot`.
+    * اضغط على زر **Start**.
+    * سيقوم البوت فوراً بإرسال بياناتك، انسخ الرقم المكتوب أمام خانة **Id** (مثال: `452445185`).
+    * هذا هو الرقم الذي تضعه في خانة **Telegram Chat ID** داخل شاشة المراقبة.
+    
+    ### 2️⃣ ثانياً: إعداد البوت الخاص بك بالكامل (في الـ Secrets)
+    إذا كنت تريد تشغيل بوت خاص بك بالكامل ليرسل التنبيهات:
+    1. ابحث في تليجرام عن `@BotFather` واضغط **Start**.
+    2. أرسل أمر `/newbot` ثم اختر اسماً للبوت (مثال: `MyGoldBot`).
+    3. اختر يوزر نيم ينتهي بكلمة bot (مثال: `HaythamGold_bot`).
+    4. سيعطيك الـ **HTTP API Token** (سلسلة طويلة من الحروف والأرقام).
+    5. قم بفتح ملف الـ Secrets في الـ Streamlit Cloud وضعه بالشكل التالي:
+    ```toml
+    TELEGRAM_BOT_TOKEN = "ضع_التوكن_الخاص_بك_هنا"
+    ```
+    * **ملحوظة حرجة جداً:** يجب أن تفتح البوت الخاص بك في تليجرام وتضغط **Start** أولاً، حتى تسمح له بإرسال الرسائل إليك!
+    """)
+
 # ==========================================
-# 5. محرك التحديث التلقائي اللحظي (Auto-Refresh)
+# 7. محرك التحديث التلقائي اللحظي (Auto-Refresh)
 # ==========================================
 time.sleep(30)
 st.rerun()
