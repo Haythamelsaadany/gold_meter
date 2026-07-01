@@ -15,6 +15,7 @@ st.markdown("""
     .price-card { background-color: #1e2430; padding: 15px; border-radius: 10px; border-left: 4px solid #D4AF37; text-align: center; }
     .price-card h3 { margin: 8px 0 0 0; color: #ffffff; font-size: 22px; }
     .price-card h5 { margin: 0; color: #D4AF37; font-size: 14px; }
+    .source-text { font-size: 12px; color: #888888; text-align: center; margin-top: 5px; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -34,7 +35,6 @@ def get_db_engine():
 
 engine = get_db_engine()
 
-# تأمين وجود الجدول
 if engine:
     try:
         with engine.begin() as conn:
@@ -53,23 +53,65 @@ if engine:
         pass
 
 # ==========================================
-# 3. جلب ومدخلات الأسعار اللحظية
+# 3. محرك جلب الأسعار اللحظي متعدد المصادر (محمي بكاش 5 دقائق)
 # ==========================================
-st.subheader("📈 أسعار الذهب والدولار اللحظية")
-col_in1, col_in2 = st.columns(2)
+@st.cache_data(ttl=300)
+def fetch_live_prices_from_exchanges():
+    # المصادر الافتراضية كخط دفاع أخير في حال انقطاع الإنترنت
+    ounce_usd = 3976.40
+    usd_egp = 49.23
+    sources_used = []
 
-with col_in1:
-    ounce_usd = st.number_input("💵 سعر أونصة الذهب عالمياً ($):", value=3976.40, step=0.5, format="%.2f")
-with col_in2:
-    usd_egp = st.number_input("🏦 سعر دولار البنك المركزي (ج.م):", value=49.23, step=0.01, format="%.2f")
+    # أ. سحب سعر الدولار مقابل الجنيه لحظياً من البورصة العالمية المفتوحة
+    try:
+        req_currency = requests.get("https://open.er-api.com/v6/latest/USD", timeout=5)
+        if req_currency.status_code == 200:
+            rates = req_currency.json().get("rates", {})
+            if "EGP" in rates:
+                usd_egp = round(rates["EGP"], 2)
+                sources_used.append("OpenExchange (USD/EGP)")
+    except Exception:
+        pass
 
-# الحسبة الرياضية للعيارات داخل السوق المصري
+    # ب. سحب سعر أونصة الذهب - المصدر الأول الاحترافي (إذا وفرت تتوكن في الـ Secrets)
+    gold_api_key = st.secrets.get("GOLD_API_KEY")
+    if gold_api_key:
+        try:
+            headers = {'x-access-token': gold_api_key}
+            req_gold_api = requests.get("https://www.goldapi.io/api/XAU/USD", headers=headers, timeout=5)
+            if req_gold_api.status_code == 200:
+                price = req_gold_api.json().get("price")
+                if price:
+                    ounce_usd = float(price)
+                    sources_used.append("GoldAPI.io (XAU)")
+        except Exception:
+            pass
+
+    # ج. سحب سعر أونصة الذهب - المصدر الثاني المفتوح (CoinGecko PAXG المربوط بالذهب الفعلي)
+    if len(sources_used) < 2:  # إذا لم يعمل المصدر الأول أو لزيادة التأكيد
+        try:
+            req_gecko = requests.get("https://api.coingecko.com/api/v3/simple/price?ids=pax-gold&vs_currencies=usd", timeout=5)
+            if req_gecko.status_code == 200:
+                gecko_price = req_gecko.json().get("pax-gold", {}).get("usd")
+                if gecko_price:
+                    ounce_usd = float(gecko_price)
+                    sources_used.append("CoinGecko Live Spot")
+        except Exception:
+            pass
+
+    return ounce_usd, usd_egp, " | ".join(sources_used) if sources_used else "Fallback Static Data"
+
+# تشغيل الفحص اللحظي للمحرك الجديد
+ounce_usd, usd_egp, data_source = fetch_live_prices_from_exchanges()
+
+# الحسابات الرياضية الدقيقة المبنية على بيانات البورصة الحية
 gold_pure_price_egp = (ounce_usd * usd_egp) / 31.10348
 price_24 = round(gold_pure_price_egp, 2)
 price_21 = round(gold_pure_price_egp * (21 / 24), 2)
 price_18 = round(gold_pure_price_egp * (18 / 24), 2)
 
-# 🔥 تم تعديل العرض هنا لـ 5 أعمدة كاملة ليعود عيار 24 للظهور فوراً
+# عرض الـ 5 كروت كاملة شاملة عيار 24
+st.subheader("📈 أسعار الذهب والدولار الحية مباشرة من البورصة")
 c1, c2, c3, c4, c5 = st.columns(5)
 with c1:
     st.markdown(f'<div class="price-card"><h5>🌍 أونصة الذهب</h5><h3>${ounce_usd:,.2f}</h3></div>', unsafe_allow_html=True)
@@ -82,6 +124,7 @@ with c4:
 with c5:
     st.markdown(f'<div class="price-card"><h5>⚜️ عيار 18</h5><h3>{price_18:,.2f} ج.م</h3></div>', unsafe_allow_html=True)
 
+st.markdown(f'<div class="source-text">📡 مصادر البيانات النشطة حالياً: {data_source}</div>', unsafe_allow_html=True)
 st.divider()
 
 # ==========================================
@@ -94,7 +137,6 @@ with col_form:
     carat_choice = st.selectbox("اختر العيار المستهدف:", ["عيار 24", "عيار 21", "عيار 18"])
     target_type = st.selectbox("نوع التنبيه:", ["بيع (ارتفاع السعر)", "شراء (انخفاض السعر)"])
     
-    # تحديد السعر الحالي المرجعي ديناميكياً
     current_selected_price = price_24 if carat_choice == "عيار 24" else (price_21 if carat_choice == "عيار 21" else price_18)
     target_price = st.number_input(f"سعر الهدف المطلوب (الحالي: {current_selected_price}):", value=float(current_selected_price), step=5.0)
     user_chat_id = st.text_input("Telegram Chat ID:", value="452445185")
@@ -141,6 +183,7 @@ with col_actions:
             st.error("❌ فشل الإرسال، تحقق من توكن التليجرام في الـ Secrets.")
 
     if st.button("🔍 فحص التنبيهات يدوياً الآن"):
+        st.cache_data.clear() # تفريغ الكاش مؤقتاً عند طلب الفحص اليدوي لجلب أحدث سعر بالثانية
         if engine:
             try:
                 df_active = pd.read_sql_query("SELECT * FROM gold_targets WHERE is_active = TRUE", engine)
@@ -159,7 +202,7 @@ with col_actions:
                         current_local_price = price_24 if c_type == "عيار 24" else (price_21 if c_type == "عيار 21" else price_18)
                         
                         condition_met = False
-                        # دقة فحص الشروط الرياضية
+                        # فحص دقيق للشرط الرياضي التلقائي
                         if "بيع" in t_type and current_local_price >= t_price:
                             condition_met = True
                         elif "شراء" in t_type and current_local_price <= t_price:
@@ -183,7 +226,7 @@ with col_actions:
                         st.success(f"🚀 تم إرسال ({alerts_triggered}) تنبيه بنجاح لتليجرام!")
                         st.rerun()
                     else:
-                        st.info("💡 تم الفحص: السعر الحالي لم يتجاوز أو يحقق أي هدف نشط بعد.")
+                        st.info("💡 تم الفحص: السعر الحالي لم يحقق شروط أي هدف نشط بعد.")
             except Exception as e:
                 st.error(f"❌ خطأ أثناء فحص الشروط: {e}")
 
