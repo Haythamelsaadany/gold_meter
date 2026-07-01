@@ -10,7 +10,7 @@ import time
 # ==========================================
 st.set_page_config(page_title="Gold Meter Pro", page_icon="🏅", layout="wide")
 
-# تعديل الـ CSS لضمان أعلى درجة تباين ووضوح للقراءة بناءً على ملف image_ff2ecb.png
+# هندسة الـ CSS لمنع أي تداخل وتحسين التباين والقراءة 100%
 st.markdown("""
     <style>
     .main-title { font-size: 32px; font-weight: bold; text-align: center; color: #D4AF37; margin-bottom: 20px; }
@@ -20,17 +20,17 @@ st.markdown("""
     .price-card h3 { margin: 8px 0 0 0; color: #ffffff; font-size: 22px; font-weight: bold; }
     .price-card h5 { margin: 0; color: #D4AF37; font-size: 14px; font-weight: bold; }
     
-    /* كروت الأخبار والتوصيات - إصلاح شامل للألوان */
-    .news-card { background-color: #111622; padding: 18px; border-radius: 8px; margin-bottom: 12px; border-right: 4px solid #00ffcc; color: #ffffff; }
-    .news-card h5 { color: #00ffcc; font-size: 16px; font-weight: bold; margin-top: 0; margin-bottom: 8px; }
-    .news-card p { color: #f0f4f8; font-size: 14px; line-height: 1.6; margin-bottom: 5px; }
-    .news-card .date-text { color: #a0aec0; font-size: 12px; display: block; margin-top: 5px; }
+    /* كروت الأخبار والتوصيات الفنية بدعم كامل للغة العربية */
+    .news-box { background-color: #111622; padding: 18px; border-radius: 8px; margin-bottom: 12px; border-right: 4px solid #00ffcc; color: #ffffff; direction: rtl; text-align: right; }
+    .news-box-title { color: #00ffcc; font-size: 16px; font-weight: bold; margin-bottom: 8px; }
+    .news-box-text { color: #f0f4f8; font-size: 14px; line-height: 1.6; margin-bottom: 5px; }
+    .news-box-date { color: #a0aec0; font-size: 12px; display: block; margin-top: 5px; }
     
-    .rec-card { background-color: #111622; padding: 18px; border-radius: 8px; margin-bottom: 12px; border-right: 4px solid #D4AF37; color: #ffffff; }
-    .rec-card h5 { color: #D4AF37; font-size: 16px; font-weight: bold; margin-top: 0; margin-bottom: 8px; }
-    .rec-card p { color: #f0f4f8; font-size: 14px; line-height: 1.6; }
-    .rec-card b { color: #ffffff; font-weight: bold; }
-    .rec-card .highlight-green { color: #00ffcc; font-weight: bold; }
+    .rec-box { background-color: #111622; padding: 18px; border-radius: 8px; margin-bottom: 12px; border-right: 4px solid #D4AF37; color: #ffffff; direction: rtl; text-align: right; }
+    .rec-box-title { color: #D4AF37; font-size: 16px; font-weight: bold; margin-bottom: 8px; }
+    .rec-box-text { color: #f0f4f8; font-size: 14px; line-height: 1.6; }
+    .highlight-green { color: #00ffcc; font-weight: bold; }
+    .highlight-white { color: #ffffff; font-weight: bold; }
     
     .source-text { font-size: 13px; color: #00ffcc; text-align: center; margin-top: 5px; font-weight: bold; }
     .warning-text { font-size: 13px; color: #ffcc00; text-align: center; margin-top: 5px; font-weight: bold; }
@@ -72,11 +72,13 @@ if engine:
         pass
 
 # ==========================================
-# 3. محرك الأسعار المطور اللحظي (Failover لمنع الـ Gap)
+# 3. محرك الأسعار المطور اللحظي وسحب الـ High & Low حركياً
 # ==========================================
 @st.cache_data(ttl=30)
 def fetch_realtime_prices_with_failover():
     ounce_usd = 4019.55  
+    high_usd = 4025.00
+    low_usd = 3995.00
     usd_egp = 49.25
     source_used = "الأسعار المرجعية"
     is_live = False
@@ -86,14 +88,23 @@ def fetch_realtime_prices_with_failover():
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     }
 
-    # [المسار الأول]: ياهو فاينانس
+    # [المسار الأول]: ياهو فاينانس - سحب السعر اللحظي وأعلى/أقل نقطة لليوم
     try:
         url_gold = "https://query2.finance.yahoo.com/v8/finance/chart/XAUUSD=X?interval=1m&range=1d"
         res_gold = requests.get(url_gold, headers=headers, timeout=4)
         if res_gold.status_code == 200:
             json_data = res_gold.json()
             ounce_usd = float(json_data['chart']['result'][0]['meta']['regularMarketPrice'])
-            source_used = "Yahoo Finance Live"
+            
+            # استخراج أعلى وأقل سعر بأمان لتجنب الـ None القيم الفارغة
+            quote_data = json_data['chart']['result'][0]['indicators']['quote'][0]
+            valid_highs = [h for h in quote_data.get('high', []) if h is not None]
+            valid_lows = [l for l in quote_data.get('low', []) if l is not None]
+            
+            high_usd = max(valid_highs) if valid_highs else ounce_usd + 5
+            low_usd = min(valid_lows) if valid_lows else ounce_usd - 5
+            
+            source_used = "Yahoo Finance Live Feed"
             is_live = True
         else:
             error_log += f"Yahoo ({res_gold.status_code}) "
@@ -109,6 +120,8 @@ def fetch_realtime_prices_with_failover():
                 gecko_price = res_gecko.json().get("pax-gold", {}).get("usd")
                 if gecko_price:
                     ounce_usd = float(gecko_price)
+                    high_usd = ounce_usd * 1.002
+                    low_usd = ounce_usd * 0.998
                     source_used = "CoinGecko (PAXG Spot)"
                     is_live = True
             else:
@@ -130,9 +143,9 @@ def fetch_realtime_prices_with_failover():
     except Exception:
         pass
 
-    return ounce_usd, usd_egp, is_live, source_used, error_log
+    return ounce_usd, high_usd, low_usd, usd_egp, is_live, source_used, error_log
 
-ounce_usd, usd_egp, is_live, data_source, error_msg = fetch_realtime_prices_with_failover()
+ounce_usd, day_high, day_low, usd_egp, is_live, data_source, error_msg = fetch_realtime_prices_with_failover()
 
 gold_pure_price_egp = (ounce_usd * usd_egp) / 31.10348
 price_24 = round(gold_pure_price_egp, 2)
@@ -140,7 +153,7 @@ price_21 = round(gold_pure_price_egp * (21 / 24), 2)
 price_18 = round(gold_pure_price_egp * (18 / 24), 2)
 
 # ==========================================
-# 4. حساب مؤشر الاتجاه (Trend Indicator) عبر الـ Session State
+# 4. حساب مؤشر الاتجاه (Trend Indicator)
 # ==========================================
 if 'last_price' not in st.session_state:
     st.session_state.last_price = ounce_usd
@@ -155,7 +168,7 @@ else:
 st.session_state.last_price = ounce_usd
 
 # ==========================================
-# 5. اللوحة الجانبية: حاسبة الاستثمار + فكرة حاسبة المصنعية والدمغة
+# 5. اللوحة الجانبية: الحاسبات الاستثمارية الذكية
 # ==========================================
 with st.sidebar:
     st.markdown("### 🧮 حاسبة الاستثمار السريع")
@@ -171,9 +184,7 @@ with st.sidebar:
     
     st.divider()
     
-    # [ميزة مضافة جديدة]: حاسبة الشراء الفعلي بالمصنعية والدمغة المصرية
     st.markdown("### 🏪 حاسبة السعر الفعلي في المحل")
-    st.write("احسب السعر الحقيقي للجرام شامل المصنعية:")
     selected_carat_calc = st.selectbox("اختر العيار للشراء:", ["عيار 24", "عيار 21", "عيار 18"], key="shop_carat")
     making_fee = st.number_input("المصنعية والدمغة للجرام (ج.م):", value=180, step=10)
     gram_count = st.number_input("عدد الجرامات المراد شراؤها:", value=10, step=1)
@@ -183,7 +194,7 @@ with st.sidebar:
     final_invoice = total_per_gram * gram_count
     
     st.markdown(f"""
-    <div style="background-color:#1e2430; padding:10px; border-radius:5px; border-right:3px solid #00ffcc;">
+    <div style="background-color:#1e2430; padding:10px; border-radius:5px; border-right:3px solid #00ffcc; direction:rtl; text-align:right;">
     <p style="margin:0; color:#ffffff; font-size:13px;">سعر الجرام بالمصنعية: <b>{total_per_gram:,.2f} ج.م</b></p>
     <p style="margin:5px 0 0 0; color:#00ffcc; font-size:15px; font-weight:bold;">الفاتورة الإجمالية: {final_invoice:,.2f} ج.م</p>
     </div>
@@ -193,7 +204,7 @@ with st.sidebar:
     st.caption("تم التطوير بواسطة م/ هيثم السعدني لمنظومة Gold Meter Pro")
 
 # ==========================================
-# 6. تقسيم التطبيق إلى تابات احترافية (Tabs) بعد التوسيع
+# 6. تقسيم التطبيق إلى تابات احترافية (Tabs)
 # ==========================================
 tab_monitor, tab_news, tab_zakat, tab_telegram_setup = st.tabs([
     "📊 شاشة المراقبة والتنبيهات", 
@@ -233,10 +244,8 @@ with tab_monitor:
         st.subheader("🎯 تسجيل هدف جديد للمراقبة")
         carat_choice = st.selectbox("اختر العيار المستهدف:", ["عيار 24", "عيار 21", "عيار 18"])
         target_type = st.selectbox("نوع التنبيه:", ["بيع (ارتفاع السعر)", "شراء (انخفاض السعر)"])
-        
         current_selected_price = price_24 if carat_choice == "عيار 24" else (price_21 if carat_choice == "عيار 21" else price_18)
         target_price = st.number_input(f"سعر الهدف المطلوب (الحالي: {current_selected_price}):", value=float(current_selected_price), step=5.0)
-        
         user_chat_id = st.text_input("Telegram Chat ID:", value="452445185")
 
         if st.button("💾 حفظ هدف التنبيه"):
@@ -256,7 +265,6 @@ with tab_monitor:
                 except Exception as e:
                     st.error(f"❌ فشل الحفظ: {e}")
 
-    # دالة إرسال التليجرام
     def send_telegram_msg(chat_id, text_msg):
         token = st.secrets.get("TELEGRAM_BOT_TOKEN")
         if not token:
@@ -270,9 +278,8 @@ with tab_monitor:
 
     with col_actions:
         st.subheader("⚡ العمليات وفحص التنبيهات")
-        
         if st.button("🔔 اختبار اتصال البوت"):
-            test_msg = f"🔔 *Gold Meter Pro*\nاتصال البوت مية مية يا هندسة ومستعد للمراقبة التلقائية! 🏖️"
+            test_msg = f"🔔 *Gold Meter Pro*\nاتصال البوت مية مية ومستعد للمراقبة التلقائية الحقيقية! 🚀"
             if send_telegram_msg(user_chat_id, test_msg):
                 st.success("🎯 تم إرسال رسالة الاختبار بنجاح للتليجرام!")
             else:
@@ -323,83 +330,81 @@ with tab_monitor:
                 except Exception as e:
                     st.error(f"❌ خطأ أثناء الفحص: {e}")
 
-    st.divider()
-    st.subheader("📋 سجل الأهداف المخزنة سحابياً (آخر 10 أهداف)")
-    if engine:
-        try:
-            df_view = pd.read_sql_query("SELECT id, carat_type, target_type, target_price, is_active FROM gold_targets ORDER BY id DESC LIMIT 10", engine)
-            if not df_view.empty:
-                st.dataframe(df_view, width="stretch")
-            else:
-                st.info("الداتا بيز فارغة حالياً.")
-        except Exception:
-            pass
-
 # ------------------------------------------
-# محتوى التاب الثاني: الأخبار والتوصيات الفنية المحدثة بالألوان الجديدة الشديدة التباين
+# محتوى التاب الثاني: الأخبار والتوصيات الاحترافية (تم حل البج المالي والبصري)
 # ------------------------------------------
 with tab_news:
     st.subheader("📰 شريط أخبار وتوصيات الذهب الفنية اللحظية")
     
-    pivot_global = ounce_usd
-    support_global = round(ounce_usd - 20, 2)
-    resistance_global = round(ounce_usd + 20, 2)
+    # [تطبيق المعادلة الكلاسيكية للارتكاز والدعم والمقاومة الفنية]
+    pivot_global = round((day_high + day_low + ounce_usd) / 3, 2)
+    support_global = round((2 * pivot_global) - day_high, 2)
+    resistance_global = round((2 * pivot_global) - day_low, 2)
     
     support_egp_21 = round((support_global * usd_egp * 21/24) / 31.10348, 2)
     resistance_egp_21 = round((resistance_global * usd_egp * 21/24) / 31.10348, 2)
 
     col_news_left, col_news_right = st.columns(2)
     
+    # طباعة كروت الـ HTML من اليسار لليمين بدون مسافات بادئة لمنع تحولها لصندوق كود
     with col_news_left:
         st.markdown("### 🌍 آخر المستجدات والتقارير")
-        st.markdown(f"""
-        <div class="news-card">
-            <h5>📢 حركة الأونصة العالمية الآن</h5>
-            <p>ثبات واستقرار نسبي للأونصة العالمية حول مستويات الـ <b>${ounce_usd:,.2f}</b> في انتظار إغلاق المحاضر السنوية وإعلان بيانات الفيدرالي الجديدة.</p>
-            <span class="date-text">📅 تحديث: لحظي متزامن</span>
-        </div>
-        <div class="news-card">
-            <h5>🏦 استقرار سعر الصرف المحلي</h5>
-            <p>استقرار تام لأسعار الصرف الرسمية للدولار عند مستويات <b>{usd_egp} ج.م</b>، مما يحمي السوق المحلي من القفزات العشوائية المفاجئة ويدعم استقرار التسعير.</p>
-            <span class="date-text">📅 تحديث: منذ ساعة</span>
-        </div>
-        """, unsafe_allow_html=True)
+        
+        html_news_1 = f"""
+<div class="news-box">
+    <div class="news-box-title">📢 حركة الأونصة العالمية الآن</div>
+    <div class="news-box-text">تتحرك الأونصة العالمية الآن في مدى يومي بين أقل سعر <span class="highlight-white">${day_low:,.2f}</span> وأعلى سعر <span class="highlight-white">${day_high:,.2f}</span>، السعر اللحظي الحالي هو <b>${ounce_usd:,.2f}</b>.</div>
+    <span class="news-box-date">📅 تحديث: لحظي متزامن</span>
+</div>
+        """
+        st.markdown(html_news_1, unsafe_allow_html=True)
+
+        html_news_2 = f"""
+<div class="news-box">
+    <div class="news-box-title">🏦 استقرار سعر الصرف المحلي</div>
+    <div class="news-box-text">استقرار تام لأسعار الصرف الرسمية للدولار عند مستويات <b>{usd_egp} ج.م</b>، مما يحمي السوق المحلي من القفزات العشوائية المفاجئة ويدعم استقرار التسعير.</div>
+    <span class="news-box-date">📅 تحديث: منذ ساعة</span>
+</div>
+        """
+        st.markdown(html_news_2, unsafe_allow_html=True)
         
     with col_news_right:
-        st.markdown("### 🎯 التوصيات الحسابية والمعادلات الديناميكية")
-        st.markdown(f"""
-        <div class="rec-card">
-            <h5>🎯 نقطة الارتكاز المرجعية اللحظية</h5>
-            <p>مستوى الارتكاز الحالي هو: <b class="highlight-green">${pivot_global:,.2f}</b></p>
-            
-            <h5>📉 مستويات الدعم (فرص الشراء)</h5>
-            <p>• عالمياً: <b>${support_global:,.2f}</b><br>
-            • يعادل محلياً لعيار 21: <b class="highlight-green">{support_egp_21:,.2f} ج.م</b></p>
-            
-            <h5>📈 مستويات المقاومة (أهداف البيع)</h5>
-            <p>• عالمياً: <b>${resistance_global:,.2f}</b><br>
-            • يعادل محلياً لعيار 21: <b class="highlight-green">{resistance_egp_21:,.2f} ج.م</b></p>
-        </div>
-        <div class="rec-card">
-            <h5>💡 نصيحة الخبراء الاستثمارية للمنظومة</h5>
-            <p>السعر يعطي إشارات استقرار نسبي. ننصح دائماً بعدم المغامرة برأس المال كاملاً، وتقسيم الشراء على مراحل تراكمية حول نقاط الدعم المحسوبة أعلاه لتقليل متوسط السعر التكلفي.</p>
-        </div>
-        """, unsafe_allow_html=True)
+        st.markdown("### 🎯 التوصيات الحسابية (معادلات بورصة الذهب الكلاسيكية)")
+        
+        html_rec_1 = f"""
+<div class="rec-box">
+    <div class="rec-box-title">🎯 نقطة الارتكاز المرجعية الحركية لليوم (Pivot Point)</div>
+    <div class="rec-box-text">مستوى الارتكاز المعتمد حسابياً الآن: <span class="highlight-green">${pivot_global:,.2f}</span></div>
+    
+    <div class="rec-box-title" style="margin-top:12px;">📉 مستويات الدعم الفني الحقيقي (فرص الشراء)</div>
+    <div class="rec-box-text">• عالمياً: <b>${support_global:,.2f}</b><br>
+    • يعادل محلياً لعيار 21: <span class="highlight-green">{support_egp_21:,.2f} ج.م</span></div>
+    
+    <div class="rec-box-title" style="margin-top:12px;">📈 مستويات المقاومة الفنية الحقيقية (أهداف البيع)</div>
+    <div class="rec-box-text">• عالمياً: <b>${resistance_global:,.2f}</b><br>
+    • يعادل محلياً لعيار 21: <span class="highlight-green">{resistance_egp_21:,.2f} ج.م</span></div>
+</div>
+        """
+        st.markdown(html_rec_1, unsafe_allow_html=True)
+
+        html_rec_2 = f"""
+<div class="rec-box">
+    <div class="rec-box-title">💡 نصيحة الاستثمار المبنية على مؤشر التقلب اليومي</div>
+    <div class="rec-box-text">بناءً على النطاق السعري لليوم، يفضل تفعيل تنبيهات الشراء التلقائية عند اقتراب السعر المحلي من نقطة الدعم المحسوبة لتضمن الدخول بأفضل سعر تكلفة ممكن.</div>
+</div>
+        """
+        st.markdown(html_rec_2, unsafe_allow_html=True)
 
 # ------------------------------------------
-# [ميزة مضافة جديدة]: محتوى التاب الثالث: حاسبة زكاة الذهب الشرعية
+# محتوى التاب الثالث: حاسبة زكاة الذهب الشرعية
 # ------------------------------------------
 with tab_zakat:
     st.subheader("🕌 حاسبة زكاة الذهب التلقائية")
-    st.write("احسب زكاة مالك على الذهب المخزن بناءً على نصاب الذهب الشرعي والأسعار اللحظية اليوم:")
-    
     col_z_1, col_z_2 = st.columns(2)
     with col_z_1:
         gold_weight = st.number_input("أدخل الوزن الإجمالي للذهب المتوفر لديك (بالجرام):", value=90.0, step=1.0)
         zakat_carat = st.selectbox("اختر عيار الذهب المخزن لديك:", ["عيار 24", "عيار 21", "عيار 18"])
     
-    # حساب النصاب الشرعي (النصاب الشرعي هو 85 جرام من عيار 24 صافي)
-    # نقوم بتحويل وزن ذهب المستخدم إلى ما يعادله من عيار 24 لمعرفة هل بلغ النصاب أم لا
     if zakat_carat == "عيار 24":
         equivalent_24 = gold_weight
         current_val = gold_weight * price_24
@@ -413,12 +418,12 @@ with tab_zakat:
     with col_z_2:
         st.markdown("### 📊 النتيجة الشرعية والحسابية:")
         if equivalent_24 >= 85.0:
-            zakat_due_egp = current_val * 0.025 # نسبة الـ 2.5% الشرعية
+            zakat_due_egp = current_val * 0.025
             st.error(f"🚨 **الذهب بلغ النصاب الشرعي!** (يعادل `{equivalent_24:.2f}` جرام عيار 24)")
             st.metric(label="💰 إجمالي القيمة الحالية للذهب:", value=f"{current_val:,.2f} ج.م")
             st.success(f"🕌 **قيمة الزكاة الواجب إخراجها فوراً (2.5%):** {zakat_due_egp:,.2f} ج.م")
         else:
-            st.info(f"💡 **لم يبلغ النصاب الشرعي بعد.** الذهب يعادل `{equivalent_24:.2f}` جرام عيار 24، والنصاب المطلوب هو 85 جرام عيار 24 صامت حراً حال عليه الحول.")
+            st.info(f"💡 **لم يبلغ النصاب الشرعي بعد.** الذهب يعادل `{equivalent_24:.2f}` جرام عيار 24، والنصاب المطلوب هو 85 جرام عيار 24 صافي.")
             st.metric(label="💰 القيمة السعرية الحالية لذهبك:", value=f"{current_val:,.2f} ج.م")
 
 # ------------------------------------------
@@ -426,28 +431,15 @@ with tab_zakat:
 # ------------------------------------------
 with tab_telegram_setup:
     st.subheader("🛠️ الدليل الشامل لربط واستخراج بيانات التليجرام")
-    
     st.markdown("""
-    لضمان أن المنظومة تعمل وترسل لك الإشعارات على موبايلك أثناء تواجدك في المصيف، اتبع الآتي:
-    
     ### 1️⃣ أولاً: استخراج الـ Chat ID الخاص بك (مجاني تماماً)
-    * افتح تطبيق تليجرام في الموبايل أو الكمبيوتر.
-    * في خانة البحث أكتب اسم البوت العالمي الموثق: `@userinfobot`.
-    * اضغط على زر **Start**.
-    * سيقوم البوت فوراً بإرسال بياناتك، انسخ الرقم المكتوب أمام خانة **Id** (مثال: `452445185`).
-    * هذا هو الرقم الذي تضعه في خانة **Telegram Chat ID** داخل شاشة المراقبة.
+    * في خانة البحث في تليجرام أكتب اسم البوت: `@userinfobot`.
+    * اضغط على زر **Start** وانسخ الرقم المكتوب أمام خانة **Id**.
     
-    ### 2️⃣ ثانياً: إعداد البوت الخاص بك بالكامل (في الـ Secrets)
-    إذا كنت تريد تشغيل بوت خاص بك بالكامل ليرسل التنبيهات:
-    1. ابحث في تليجرام عن `@BotFather` واضغط **Start**.
-    2. أرسل أمر `/newbot` ثم اختر اسماً للبوت (مثال: `MyGoldBot`).
-    3. اختر يوزر نيم ينتهي بكلمة bot (مثال: `HaythamGold_bot`).
-    4. سيعطيك الـ **HTTP API Token** (سلسلة طويلة من الحروف والأرقام).
-    5. قم بفتح ملف الـ Secrets في الـ Streamlit Cloud وضعه بالشكل التالي:
+    ### 2️⃣ ثانياً: إعداد البوت الخاص بك في الـ Secrets
     ```toml
     TELEGRAM_BOT_TOKEN = "ضع_التوكن_الخاص_بك_هنا"
     ```
-    * **ملحوظة حرجة جداً:** يجب أن تفتح البوت الخاص بك في تليجرام وتضغط **Start** أولاً، حتى تسمح له بإرسال الرسائل إليك!
     """)
 
 # ==========================================
