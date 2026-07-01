@@ -5,38 +5,36 @@ import requests
 import datetime
 
 # ==========================================
-# 1. إعدادات الصفحة والواجهة الاحترافية لـ Gold Meter Pro
+# 1. إعدادات الواجهة الاحترافية لـ Gold Meter Pro
 # ==========================================
 st.set_page_config(page_title="Gold Meter Pro", page_icon="🏅", layout="wide")
 
-# تم إصلاح هذا السطر ليعمل فوراً بدون أخطاء التايب
 st.markdown("""
     <style>
-    .main-title { font-size: 34px; font-weight: bold; text-align: center; color: #D4AF37; margin-bottom: 25px; }
-    .price-card { background-color: #1e2430; padding: 20px; border-radius: 12px; border-left: 5px solid #D4AF37; text-align: center; box-shadow: 2px 2px 10px rgba(0,0,0,0.3); }
-    .price-card h3 { margin: 10px 0 0 0; color: #ffffff; }
-    .price-card h5 { margin: 0; color: #D4AF37; }
+    .main-title { font-size: 32px; font-weight: bold; text-align: center; color: #D4AF37; margin-bottom: 20px; }
+    .price-card { background-color: #1e2430; padding: 15px; border-radius: 10px; border-left: 4px solid #D4AF37; text-align: center; }
+    .price-card h3 { margin: 8px 0 0 0; color: #ffffff; font-size: 22px; }
+    .price-card h5 { margin: 0; color: #D4AF37; font-size: 14px; }
     </style>
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="main-title">🏅 منظومة الذهب الذكية - Gold Meter Pro</div>', unsafe_allow_html=True)
 
 # ==========================================
-# 2. إدارة الاتصال الآمن بالسيرفر السحابي (Supabase) via SQLAlchemy
+# 2. الاتصال الآمن بـ Supabase عبر SQLAlchemy
 # ==========================================
 def get_db_engine():
     try:
         db = st.secrets["postgres"]
         db_url = f"postgresql://{db['user']}:{db['password']}@{db['host']}:{db['port']}/{db['database']}"
-        engine = create_engine(db_url)
-        return engine
+        return create_engine(db_url)
     except Exception as e:
-        st.error(f"❌ خطأ في قراءة بيانات الـ Secrets لقاعدة البيانات: {e}")
+        st.error(f"❌ خطأ في الـ Secrets لقاعدة البيانات: {e}")
         return None
 
 engine = get_db_engine()
 
-# تهيئة الجدول تلقائياً في السيرفر لضمان عدم حدوث كراش
+# تأمين وجود الجدول
 if engine:
     try:
         with engine.begin() as conn:
@@ -55,7 +53,7 @@ if engine:
         pass
 
 # ==========================================
-# 3. إدخال وحساب الأسعار الحالية (عالمياً ومحلياً)
+# 3. جلب ومدخلات الأسعار اللحظية
 # ==========================================
 st.subheader("📈 أسعار الذهب والدولار اللحظية")
 col_in1, col_in2 = st.columns(2)
@@ -65,27 +63,29 @@ with col_in1:
 with col_in2:
     usd_egp = st.number_input("🏦 سعر دولار البنك المركزي (ج.م):", value=49.23, step=0.01, format="%.2f")
 
-# الحسبة الرياضية الدقيقة للجرامات داخل السوق المصري
+# الحسبة الرياضية للعيارات داخل السوق المصري
 gold_pure_price_egp = (ounce_usd * usd_egp) / 31.10348
 price_24 = round(gold_pure_price_egp, 2)
 price_21 = round(gold_pure_price_egp * (21 / 24), 2)
 price_18 = round(gold_pure_price_egp * (18 / 24), 2)
 
-# عرض كروت الأسعار التفاعلية للمستخدم
-c1, c2, c3, c4 = st.columns(4)
+# 🔥 تم تعديل العرض هنا لـ 5 أعمدة كاملة ليعود عيار 24 للظهور فوراً
+c1, c2, c3, c4, c5 = st.columns(5)
 with c1:
     st.markdown(f'<div class="price-card"><h5>🌍 أونصة الذهب</h5><h3>${ounce_usd:,.2f}</h3></div>', unsafe_allow_html=True)
 with c2:
     st.markdown(f'<div class="price-card"><h5>🏦 دولار المركزي</h5><h3>{usd_egp} ج.م</h3></div>', unsafe_allow_html=True)
 with c3:
-    st.markdown(f'<div class="price-card"><h5>✨ عيار 21</h5><h3>{price_21:,.2f} ج.م</h3></div>', unsafe_allow_html=True)
+    st.markdown(f'<div class="price-card"><h5>🏆 عيار 24</h5><h3>{price_24:,.2f} ج.م</h3></div>', unsafe_allow_html=True)
 with c4:
+    st.markdown(f'<div class="price-card"><h5>✨ عيار 21</h5><h3>{price_21:,.2f} ج.م</h3></div>', unsafe_allow_html=True)
+with c5:
     st.markdown(f'<div class="price-card"><h5>⚜️ عيار 18</h5><h3>{price_18:,.2f} ج.م</h3></div>', unsafe_allow_html=True)
 
 st.divider()
 
 # ==========================================
-# 4. لوحة التحكم وتخزين الأهداف في قاعدة البيانات
+# 4. لوحة التحكم وتخزين الأهداف
 # ==========================================
 col_form, col_actions = st.columns([1, 1])
 
@@ -94,7 +94,7 @@ with col_form:
     carat_choice = st.selectbox("اختر العيار المستهدف:", ["عيار 24", "عيار 21", "عيار 18"])
     target_type = st.selectbox("نوع التنبيه:", ["بيع (ارتفاع السعر)", "شراء (انخفاض السعر)"])
     
-    # جلب السعر الحالي للعيار تلقائياً لتسهيل الكتابة
+    # تحديد السعر الحالي المرجعي ديناميكياً
     current_selected_price = price_24 if carat_choice == "عيار 24" else (price_21 if carat_choice == "عيار 21" else price_18)
     target_price = st.number_input(f"سعر الهدف المطلوب (الحالي: {current_selected_price}):", value=float(current_selected_price), step=5.0)
     user_chat_id = st.text_input("Telegram Chat ID:", value="452445185")
@@ -113,10 +113,10 @@ with col_form:
                 st.success(f"✅ تم حفظ هدف الـ {target_type} للـ {carat_choice} بنجاح!")
                 st.rerun()
             except Exception as e:
-                st.error(f"❌ فشل الحفظ في قاعدة البيانات: {e}")
+                st.error(f"❌ فشل الحفظ: {e}")
 
 # ==========================================
-# 5. منطق فحص الأهداف وإرسال إشعارات التليجرام الفورية
+# 5. منطق فحص الأهداف وإرسال إشعارات التليجرام
 # ==========================================
 def send_telegram_msg(chat_id, text_msg):
     token = st.secrets.get("TELEGRAM_BOT_TOKEN")
@@ -124,9 +124,8 @@ def send_telegram_msg(chat_id, text_msg):
         st.error("❌ مفتاح TELEGRAM_BOT_TOKEN غير متاح في الـ Secrets!")
         return False
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {"chat_id": chat_id, "text": text_msg, "parse_mode": "Markdown"}
     try:
-        res = requests.post(url, json=payload)
+        res = requests.post(url, json={"chat_id": chat_id, "text": text_msg, "parse_mode": "Markdown"})
         return res.status_code == 200
     except Exception:
         return False
@@ -134,17 +133,16 @@ def send_telegram_msg(chat_id, text_msg):
 with col_actions:
     st.subheader("⚡ العمليات وفحص التنبيهات")
     
-    if st.button("🔔 اختبار اتصال البوت الجديد"):
-        test_msg = f"🔔 *Gold Meter Pro*\nاتصال البوت الجديد شغال تمام التمام يا هندسة! 🚀\nالوقت الحالي: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+    if st.button("🔔 اختبار اتصال البوت"):
+        test_msg = f"🔔 *Gold Meter Pro*\nاتصال البوت شغال وممتاز يا هندسة! 🚀\nالوقت: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         if send_telegram_msg(user_chat_id, test_msg):
-            st.success("🎯 تم إرسال رسالة الاختبار بنجاح! شيك على موبايلك.")
+            st.success("🎯 تم إرسال رسالة الاختبار بنجاح!")
         else:
-            st.error("❌ فشل إرسال رسالة الاختبار. تحقق من التوكن.")
+            st.error("❌ فشل الإرسال، تحقق من توكن التليجرام في الـ Secrets.")
 
     if st.button("🔍 فحص التنبيهات يدوياً الآن"):
         if engine:
             try:
-                # القراءة باستخدام محرك SQLAlchemy لمنع الـ UserWarning نهائياً
                 df_active = pd.read_sql_query("SELECT * FROM gold_targets WHERE is_active = TRUE", engine)
                 
                 if df_active.empty:
@@ -161,7 +159,7 @@ with col_actions:
                         current_local_price = price_24 if c_type == "عيار 24" else (price_21 if c_type == "عيار 21" else price_18)
                         
                         condition_met = False
-                        # تحقق منطق الشروط بدقة
+                        # دقة فحص الشروط الرياضية
                         if "بيع" in t_type and current_local_price >= t_price:
                             condition_met = True
                         elif "شراء" in t_type and current_local_price <= t_price:
@@ -178,7 +176,6 @@ with col_actions:
                             )
                             if send_telegram_msg(c_id, alert_text):
                                 alerts_triggered += 1
-                                # إيقاف التنبيه بعد إرساله لعدم التكرار المزعج
                                 with engine.begin() as conn:
                                     conn.execute(text("UPDATE gold_targets SET is_active = FALSE WHERE id = :id"), {"id": row_id})
                     
@@ -191,7 +188,7 @@ with col_actions:
                 st.error(f"❌ خطأ أثناء فحص الشروط: {e}")
 
 # ==========================================
-# 6. عرض سجل الأهداف الفعالة (ببرامتر العرض المحدث)
+# 6. عرض سجل الأهداف
 # ==========================================
 st.divider()
 st.subheader("📋 سجل الأهداف المخزنة سحابياً (آخر 10 أهداف)")
@@ -200,9 +197,8 @@ if engine:
     try:
         df_view = pd.read_sql_query("SELECT id, carat_type, target_type, target_price, is_active FROM gold_targets ORDER BY id DESC LIMIT 10", engine)
         if not df_view.empty:
-            # استبدال use_container_width بالبرامتر الجديد لمنع الـ Logs من الامتلاء بالتحذيرات
             st.dataframe(df_view, width="stretch")
         else:
             st.info("الداتا بيز فارغة حالياً.")
     except Exception as e:
-        st.error(f"❌ تعذر جلب سجل الأهداف: {e}")
+        st.error(f"❌ تعذر جلب السجل: {e}")
