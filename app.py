@@ -1,5 +1,4 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 import yfinance as yf
 import feedparser
@@ -7,12 +6,33 @@ import json
 import requests
 from datetime import datetime, timedelta
 import time
+import psycopg2  # تم التغيير إلى مكتبة بوستجرس لإدارة السيرفر السحابي
 
 # إعداد الصفحة العام
 st.set_page_config(page_title="Gold Meter Pro 2026", layout="wide", page_icon="🏅")
 
 # ==========================================
-# 1. نظام إرسال رسائل تليجرام (معدل)
+# 0. دالة الاتصال بقاعدة بيانات Supabase
+# ==========================================
+def get_db_connection():
+    """إنشاء اتصال آمن مع قاعدة بيانات Supabase باستخدام الـ Secrets الشاملة"""
+    try:
+        creds = st.secrets["postgres"]
+        conn = psycopg2.connect(
+            host=creds["host"],
+            port=creds["port"],
+            database=creds["database"],
+            user=creds["user"],
+            password=creds["password"],
+            connect_timeout=10
+        )
+        return conn
+    except Exception as e:
+        st.error(f"❌ فشل الاتصال بقاعدة البيانات السحابية Supabase: {e}")
+        return None
+
+# ==========================================
+# 1. نظام إرسال رسائل تليجرام
 # ==========================================
 def send_telegram_message(chat_id, text):
     try:
@@ -20,7 +40,6 @@ def send_telegram_message(chat_id, text):
             return False, "❌ مفتاح TELEGRAM_BOT_TOKEN غير موجود!"
         
         token = st.secrets["TELEGRAM_BOT_TOKEN"].strip()
-        # ✅ رابط صحيح
         url = f"https://api.telegram.org/bot{token}/sendMessage"
         
         payload = {
@@ -38,67 +57,84 @@ def send_telegram_message(chat_id, text):
         return False, f"❌ خطأ في الشبكة: {str(e)}"
 
 # ==========================================
-# 2. إدارة قاعدة البيانات المحلية (SQLite)
+# 2. إدارة قاعدة البيانات السحابية (Supabase / Postgres)
 # ==========================================
 def init_db():
-    """تهيئة قاعدة البيانات المحلية"""
-    conn = sqlite3.connect('gold_data.db')
+    """تهيئة الجداول على السيرفر السحابي بأسلوب Postgres"""
+    conn = get_db_connection()
+    if not conn:
+        return
     c = conn.cursor()
     
     # جدول التنبيهات
     c.execute('''CREATE TABLE IF NOT EXISTS gold_alerts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         username TEXT,
         tg_id TEXT,
         karat TEXT,
         high_target REAL,
         low_target REAL,
-        triggered INTEGER DEFAULT 0,
+        triggered INT DEFAULT 0,
         last_alerted_date TEXT
     )''')
     
     # جدول إحصائيات الزوار
     c.execute('''CREATE TABLE IF NOT EXISTS site_stats (
-        id INTEGER PRIMARY KEY,
-        views INTEGER
+        id INT PRIMARY KEY,
+        views INT
     )''')
-    c.execute("INSERT OR IGNORE INTO site_stats (id, views) VALUES (1, 0)")
+    c.execute("INSERT INTO site_stats (id, views) VALUES (1, 0) ON CONFLICT (id) DO NOTHING")
     
     conn.commit()
+    c.close()
     conn.close()
 
 def update_and_get_views():
-    """تحديث وقراءة عدد الزوار"""
-    conn = sqlite3.connect('gold_data.db')
+    """تحديث وقراءة عدد الزوار من السيرفر"""
+    conn = get_db_connection()
+    if not conn:
+        return 0
     c = conn.cursor()
-    if 'tracked' not in st.session_state:
-        st.session_state['tracked'] = True
-        c.execute("UPDATE site_stats SET views = views + 1 WHERE id = 1")
-        conn.commit()
-    c.execute("SELECT views FROM site_stats WHERE id = 1")
-    views = c.fetchone()[0]
-    conn.close()
+    views = 0
+    try:
+        if 'tracked' not in st.session_state:
+            st.session_state['tracked'] = True
+            c.execute("UPDATE site_stats SET views = views + 1 WHERE id = 1")
+            conn.commit()
+        c.execute("SELECT views FROM site_stats WHERE id = 1")
+        res = c.fetchone()
+        views = res[0] if res else 0
+    except Exception as e:
+        print(f"خطأ الزيارات: {e}")
+    finally:
+        c.close()
+        conn.close()
     return views
 
 def save_alert(username, tg_id, karat, high, low):
-    """حفظ التنبيه في SQLite"""
-    conn = sqlite3.connect('gold_data.db')
+    """حفظ التنبيه في سوبابيس السحابية"""
+    conn = get_db_connection()
+    if not conn:
+        return False, "❌ لا يوجد اتصال بالسيرفر"
     c = conn.cursor()
     try:
         c.execute("""
             INSERT INTO gold_alerts (username, tg_id, karat, high_target, low_target, triggered)
-            VALUES (?, ?, ?, ?, ?, 0)
+            VALUES (%s, %s, %s, %s, %s, 0)
         """, (username, tg_id, karat, float(high), float(low)))
         conn.commit()
-        return True, "✅ تم الحفظ بنجاح"
+        return True, "✅ تم الحفظ بنجاح في السيرفر السحابي"
     except Exception as e:
-        return False, f"❌ خطأ: {e}"
+        return False, f"❌ خطأ في الحفظ: {e}"
     finally:
+        c.close()
         conn.close()
 
 def get_alerts(only_active=True):
-    """جلب التنبيهات من SQLite"""
-    conn = sqlite3.connect('gold_data.db')
+    """جلب التنبيهات"""
+    conn = get_db_connection()
+    if not conn:
+        return pd.DataFrame()
     try:
         query = "SELECT id, username, tg_id, karat, high_target, low_target, triggered, last_alerted_date FROM gold_alerts"
         if only_active:
@@ -114,14 +150,16 @@ def get_alerts(only_active=True):
 
 def update_alert_triggered(alert_id):
     """تحديث حالة التنبيه بعد الإرسال"""
-    conn = sqlite3.connect('gold_data.db')
+    conn = get_db_connection()
+    if not conn:
+        return False
     c = conn.cursor()
     try:
         today = datetime.now().strftime('%Y-%m-%d')
         c.execute("""
             UPDATE gold_alerts 
-            SET triggered = 1, last_alerted_date = ?
-            WHERE id = ?
+            SET triggered = 1, last_alerted_date = %s
+            WHERE id = %s
         """, (today, alert_id))
         conn.commit()
         return True
@@ -129,20 +167,7 @@ def update_alert_triggered(alert_id):
         print(f"خطأ في تحديث التنبيه: {e}")
         return False
     finally:
-        conn.close()
-
-def delete_alert(alert_id):
-    """حذف تنبيه"""
-    conn = sqlite3.connect('gold_data.db')
-    c = conn.cursor()
-    try:
-        c.execute("DELETE FROM gold_alerts WHERE id = ?", (alert_id,))
-        conn.commit()
-        return True
-    except Exception as e:
-        print(f"خطأ في حذف التنبيه: {e}")
-        return False
-    finally:
+        c.close()
         conn.close()
 
 # ==========================================
@@ -150,7 +175,6 @@ def delete_alert(alert_id):
 # ==========================================
 @st.cache_data(ttl=30)
 def get_market_data():
-    """جلب أسعار الذهب والدولار"""
     gold_oz = 2330.0
     usd_egp = 49.50
     
@@ -177,10 +201,9 @@ def get_market_data():
     }, gold_oz, usd_egp
 
 # ==========================================
-# 4. محرك التنبيهات اليدوي (للتشغيل عند الطلب)
+# 4. محرك التنبيهات اليدوي
 # ==========================================
 def check_and_send_alerts():
-    """فحص التنبيهات وإرسالها - يتم استدعاؤها يدوياً"""
     try:
         prices, _, _ = get_market_data()
         today = datetime.now().strftime('%Y-%m-%d')
@@ -205,7 +228,6 @@ def check_and_send_alerts():
             should_send = False
             alert_msg = ""
             
-            # فحص الهدف الأعلى
             if current_price >= high_target and last_alerted != today:
                 alert_msg = f"""🚀 *تنبيه صعود الذهب!*
 
@@ -219,7 +241,6 @@ def check_and_send_alerts():
 📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
                 should_send = True
             
-            # فحص الهدف الأدنى
             elif current_price <= low_target and last_alerted != today:
                 alert_msg = f"""📉 *تنبيه هبوط الذهب!*
 
@@ -255,7 +276,6 @@ def check_and_send_alerts():
 # ==========================================
 @st.cache_data(ttl=1800)
 def get_safe_historical_data():
-    """جلب البيانات التاريخية للرسم البياني"""
     try:
         ticker = yf.Ticker("GC=F")
         hist = ticker.history(period="1mo")
@@ -264,7 +284,6 @@ def get_safe_historical_data():
     except Exception:
         pass
     
-    # بيانات احتياطية
     dates = [datetime.now() - timedelta(days=i) for i in range(30)][::-1]
     fallback_prices = [2320 + (i * 1.8) for i in range(30)]
     df_fallback = pd.DataFrame({"Close": fallback_prices}, index=dates)
@@ -274,19 +293,15 @@ def get_safe_historical_data():
 # 6. التطبيق الرئيسي
 # ==========================================
 def main():
-    # تهيئة قاعدة البيانات
     init_db()
     views_count = update_and_get_views()
     
-    # العنوان الرئيسي
     st.title("🏅 Gold Meter Pro - المنظومة التفاعلية الشاملة")
     st.caption(f"👁️ عدد زيارات المنصة: {views_count} زائر")
-    st.info("💡 **ملاحظة:** النظام يعمل الآن بقاعدة بيانات محلية (SQLite) لضمان الاستقرار التام.")
+    st.success("💡 **ملاحظة:** النظام يعمل الآن بقاعدة بيانات سحابية متزامنة (Supabase) لحفظ البيانات بشكل دائم.")
     
-    # جلب الأسعار
     prices, gold_oz, usd_egp = get_market_data()
     
-    # عرض المؤشرات
     st.markdown("### 🌐 الشاشة اللحظية للمؤشرات العالمية والبنكية")
     macro_cols = st.columns(2)
     macro_cols[0].metric("🌟 أونصة الذهب عالمياً", f"${gold_oz:,.2f}")
@@ -303,16 +318,10 @@ def main():
     
     st.divider()
     
-    # التبويبات
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📊 التحليل والبورصة",
-        "💡 التوصيات الذكية",
-        "📰 أخبار الذهب",
-        "🔔 التنبيهات",
-        "⚙️ الإدارة"
+        "📊 التحليل والبورصة", "💡 التوصيات الذكية", "📰 أخبار الذهب", "🔔 التنبيهات", "⚙️ الإدارة"
     ])
     
-    # ===== تبويب 1: التحليل =====
     with tab1:
         st.subheader("📈 أداء سعر الأوقية عالمياً")
         chart_data, is_fallback = get_safe_historical_data()
@@ -320,7 +329,6 @@ def main():
             st.info("⚠️ بيانات بيانية تقريبية مؤقتاً - الأسعار الفورية دقيقة 100%")
         st.line_chart(chart_data)
     
-    # ===== تبويب 2: التوصيات =====
     with tab2:
         st.subheader("🤖 نظام التوصيات والتحليل الفني")
         if prices["21"] > 3800:
@@ -328,7 +336,6 @@ def main():
         else:
             st.success("✅ الأسعار مستقرة - فرصة استثمارية جيدة")
     
-    # ===== تبويب 3: الأخبار =====
     with tab3:
         st.subheader("📰 آخر أخبار الذهب")
         try:
@@ -342,11 +349,9 @@ def main():
         except Exception as e:
             st.warning(f"⚠️ خطأ في جلب الأخبار: {e}")
     
-    # ===== تبويب 4: التنبيهات =====
     with tab4:
         st.subheader("🔔 إعداد التنبيهات التفاعلية")
         
-        # اختبار البوت
         col_test1, col_test2 = st.columns([3, 1])
         with col_test2:
             if st.button("🔍 اختبار البوت"):
@@ -366,35 +371,21 @@ def main():
         
         st.divider()
         
-        # نموذج الإعداد
         col1, col2 = st.columns(2)
-        
         with col1:
             username = st.text_input("👤 اسمك الكريم", key="input_username")
-            telegram_id = st.text_input("🆔 معرف التليجرام (Chat ID)", key="input_tgid", 
-                                       help="احصل عليه من @userinfobot")
-            
+            telegram_id = st.text_input("🆔 معرف التليجرام (Chat ID)", key="input_tgid", help="احصل عليه من @userinfobot")
             if telegram_id and not telegram_id.isdigit():
                 st.warning("⚠️ يجب أن يكون Chat ID أرقام فقط!")
         
         with col2:
             selected_karat = st.selectbox("💎 اختر العيار", ["24", "22", "21", "18"], key="input_karat")
-            
-            # أسعار مقترحة
             default_high = float(round(prices[selected_karat] + 150))
             default_low = float(round(prices[selected_karat] - 150))
             
-            high_target = st.number_input("🚀 هدف البيع (ارتفاع)", 
-                                         value=default_high, 
-                                         step=50.0,
-                                         key="input_high")
-            
-            low_target = st.number_input("📉 هدف الشراء (انخفاض)", 
-                                        value=default_low, 
-                                        step=50.0,
-                                        key="input_low")
+            high_target = st.number_input("🚀 هدف البيع (ارتفاع)", value=default_high, step=50.0, key="input_high")
+            low_target = st.number_input("📉 هدف الشراء (انخفاض)", value=default_low, step=50.0, key="input_low")
         
-        # أزرار التحكم
         col_btn1, col_btn2, col_btn3, col_btn4 = st.columns(4)
         
         with col_btn1:
@@ -404,36 +395,21 @@ def main():
                 elif not telegram_id.isdigit():
                     st.error("❌ معرف التليجرام غير صحيح (أرقام فقط)")
                 else:
-                    # إرسال رسالة اختبار
-                    welcome_msg = f"""🔔 *مرحباً {username}!*
-
-✅ تم تفعيل تنبيهات Gold Meter بنجاح.
-
-📊 العيار: {selected_karat}
-🎯 هدف البيع: {high_target:,.0f} ج.م
-🎯 هدف الشراء: {low_target:,.0f} ج.م
-
-🔄 سيتم إرسال تنبيه عند تحقيق الأهداف.
-📅 {datetime.now().strftime('%Y-%m-%d %H:%M')}"""
-                    
+                    welcome_msg = f"""🔔 *مرحباً {username}!* \n\n✅ تم تفعيل تنبيهات Gold Meter بنجاح.\n\n📊 العيار: {selected_karat}\n🎯 هدف البيع: {high_target:,.0f} ج.م\n🎯 هدف الشراء: {low_target:,.0f} ج.م\n\n🔄 سيتم إرسال تنبيه عند تحقيق الأهداف."""
                     with st.spinner("جاري إرسال رسالة الاختبار..."):
                         success, msg = send_telegram_message(telegram_id, welcome_msg)
                     
                     if success:
-                        # حفظ في قاعدة البيانات
                         save_success, save_msg = save_alert(username, telegram_id, selected_karat, high_target, low_target)
-                        
                         if save_success:
                             st.balloons()
                             st.success(f"✅ {save_msg}")
-                            st.info("📱 تم إرسال رسالة تأكيد لهاتفك")
                             time.sleep(1)
                             st.rerun()
                         else:
                             st.error(save_msg)
                     else:
                         st.error(f"❌ فشل إرسال رسالة الاختبار: {msg}")
-                        st.warning("💡 تأكد من أن Chat ID صحيح وأن البوت يعمل")
         
         with col_btn2:
             if st.button("🔔 فحص التنبيهات", use_container_width=True):
@@ -446,56 +422,51 @@ def main():
         with col_btn3:
             if st.button("🔄 إعادة تعيين", use_container_width=True):
                 if telegram_id:
-                    conn = sqlite3.connect('gold_data.db')
-                    c = conn.cursor()
-                    c.execute("UPDATE gold_alerts SET triggered = 0, last_alerted_date = NULL WHERE tg_id = ?", (telegram_id,))
-                    conn.commit()
-                    conn.close()
-                    st.success("✅ تم إعادة تعيين التنبيهات!")
-                    st.rerun()
+                    conn = get_db_connection()
+                    if conn:
+                        c = conn.cursor()
+                        c.execute("UPDATE gold_alerts SET triggered = 0, last_alerted_date = NULL WHERE tg_id = %s", (telegram_id,))
+                        conn.commit()
+                        c.close()
+                        conn.close()
+                        st.success("✅ تم إعادة تعيين التنبيهات سحابياً!")
+                        st.rerun()
                 else:
                     st.warning("⚠️ أدخل معرف التليجرام أولاً")
         
         with col_btn4:
             if st.button("🗑️ مسح التنبيهات", use_container_width=True):
                 if telegram_id:
-                    conn = sqlite3.connect('gold_data.db')
-                    c = conn.cursor()
-                    c.execute("DELETE FROM gold_alerts WHERE tg_id = ?", (telegram_id,))
-                    conn.commit()
-                    conn.close()
-                    st.success("✅ تم مسح تنبيهاتك!")
-                    st.rerun()
+                    conn = get_db_connection()
+                    if conn:
+                        c = conn.cursor()
+                        c.execute("DELETE FROM gold_alerts WHERE tg_id = %s", (telegram_id,))
+                        conn.commit()
+                        c.close()
+                        conn.close()
+                        st.success("✅ تم مسح تنبيهاتك سحابياً!")
+                        st.rerun()
                 else:
                     st.warning("⚠️ أدخل معرف التليجرام أولاً")
         
         st.divider()
         
-        # عرض التنبيهات النشطة
         st.subheader("📋 التنبيهات المسجلة")
         df_alerts = get_alerts(only_active=False)
-        
         if not df_alerts.empty:
-            # تنسيق الجدول
             display_df = df_alerts[['username', 'karat', 'high_target', 'low_target', 'triggered']].copy()
             display_df.columns = ['المستخدم', 'العيار', 'هدف البيع', 'هدف الشراء', 'الحالة']
             display_df['الحالة'] = display_df['الحالة'].apply(lambda x: '🟢 نشط' if x == 0 else '🔴 منفذ')
-            
             st.dataframe(display_df, use_container_width=True)
         else:
             st.info("ℹ️ لا توجد تنبيهات مسجلة")
     
-    # ===== تبويب 5: الإدارة =====
     with tab5:
         st.subheader("⚙️ الإدارة والتحكم")
-        
-        # عرض جميع التنبيهات
         st.markdown("### 📊 جميع التنبيهات")
         df_all = get_alerts(only_active=False)
         if not df_all.empty:
             st.dataframe(df_all, use_container_width=True)
-            
-            # إحصائيات
             col_stat1, col_stat2 = st.columns(2)
             with col_stat1:
                 active = len(df_all[df_all['triggered'] == 0])
@@ -507,37 +478,12 @@ def main():
             st.info("ℹ️ لا توجد بيانات")
         
         st.divider()
-        
-        # دليل المساعدة
         st.markdown("### ❓ دليل المساعدة")
         with st.expander("📖 كيف تحصل على Chat ID الخاص بك؟"):
-            st.markdown("""
-            1. افتح تطبيق تليجرام
-            2. ابحث عن البوت: `@userinfobot`
-            3. اضغط **Start**
-            4. سيرسل لك البوت رقم الـ ID الخاص بك
-            """)
-        
-        with st.expander("📖 كيفية إعداد البوت؟"):
-            st.markdown("""
-            1. ابحث عن `@BotFather` في تليجرام
-            2. أرسل `/newbot` واتبع التعليمات
-            3. احصل على التوكن
-            4. ضع التوكن في ملف `secrets.toml`
-            """)
-    
-    # التذييل
-    st.markdown("<hr>", unsafe_allow_html=True)
-    st.markdown(
-        "<div style='text-align:center; color:gray; font-size:14px;'>"
-        "© Techno logic 2026. Haytham Elsaadany"
-        "</div>",
-        unsafe_allow_html=True
-    )
+            st.markdown("1. افتح تطبيق تليجرام\n2. ابحث عن البوت: `@userinfobot`\n3. اضغط **Start**\n4. سيرسل لك البوت رقم الـ ID الخاص بك")
 
-# ==========================================
-# تشغيل التطبيق
-# ==========================================
+    st.markdown("<hr>", unsafe_allow_html=True)
+    st.markdown("<div style='text-align:center; color:gray; font-size:14px;'>© Techno logic 2026. Haytham Elsaadany</div>", unsafe_allow_html=True)
+
 if __name__ == "__main__":
     main()
-
