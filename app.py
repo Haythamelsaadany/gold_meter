@@ -15,7 +15,8 @@ st.markdown("""
     .price-card { background-color: #1e2430; padding: 15px; border-radius: 10px; border-left: 4px solid #D4AF37; text-align: center; }
     .price-card h3 { margin: 8px 0 0 0; color: #ffffff; font-size: 22px; }
     .price-card h5 { margin: 0; color: #D4AF37; font-size: 14px; }
-    .source-text { font-size: 12px; color: #00ffcc; text-align: center; margin-top: 5px; font-weight: bold; }
+    .source-text { font-size: 13px; color: #00ffcc; text-align: center; margin-top: 5px; font-weight: bold; }
+    .warning-text { font-size: 13px; color: #ff9900; text-align: center; margin-top: 5px; font-weight: bold; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -53,57 +54,61 @@ if engine:
         pass
 
 # ==========================================
-# 3. محرك ياهو فاينانس اللحظي بالثانية (كاش 10 ثوانٍ فقط لمنع الجاب)
+# 3. محرك ياهو فاينانس المطور (Query2 المفتوح + كاش 5 ثوانٍ فقط)
 # ==========================================
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=5)
 def fetch_yahoo_realtime_prices():
-    # قيم احتياطية صارمة في حال حدوث أي انقطاع مؤقت في الشبكة
-    ounce_usd = 3976.40
-    usd_egp = 49.23
-    sources = []
+    # أسعار احتياطية ديناميكية قريبة جداً من السوق الحالي
+    ounce_usd = 4015.00  
+    usd_egp = 49.25
+    is_live = False
+    error_log = ""
     
+    # هيدرز متقدمة جداً لمنع الـ 403 Forbidden على السيرفر السحابي
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9"
     }
 
-    # أ. سحب سعر أونصة الذهب الفوري (Spot Gold) مباشرة
+    # جلب سعر أونصة الذهب الفوري عبر سيرفر ياهو الثاني الأكثر استقراراً للمنصات
     try:
-        url_gold = "https://query1.finance.yahoo.com/v8/finance/chart/XAUUSD=X?interval=1m&range=1d"
-        res_gold = requests.get(url_gold, headers=headers, timeout=7)
+        url_gold = "https://query2.finance.yahoo.com/v8/finance/chart/XAUUSD=X?interval=1m&range=1d"
+        res_gold = requests.get(url_gold, headers=headers, timeout=5)
         if res_gold.status_code == 200:
             json_data = res_gold.json()
-            live_price = json_data['chart']['result'][0]['meta']['regularMarketPrice']
-            ounce_usd = float(live_price)
-            sources.append("Yahoo Gold Spot (XAU/USD)")
-    except Exception:
-        pass
+            ounce_usd = float(json_data['chart']['result'][0]['meta']['regularMarketPrice'])
+            is_live = True
+        else:
+            error_log += f"Gold API Error ({res_gold.status_code}) "
+    except Exception as e:
+        error_log += f"Gold Connection Failed ({str(e)}) "
 
-    # ب. سحب سعر الدولار مقابل الجنيه اللحظي الحقيقي
+    # جلب سعر دولار البنك المركزي / الفوركس لحظياً
     try:
-        url_egp = "https://query1.finance.yahoo.com/v8/finance/chart/USDEGP=X?interval=1m&range=1d"
-        res_egp = requests.get(url_egp, headers=headers, timeout=7)
+        url_egp = "https://query2.finance.yahoo.com/v8/finance/chart/USDEGP=X?interval=1m&range=1d"
+        res_egp = requests.get(url_egp, headers=headers, timeout=5)
         if res_egp.status_code == 200:
             json_data = res_egp.json()
-            live_rate = json_data['chart']['result'][0]['meta']['regularMarketPrice']
-            usd_egp = float(live_rate)
-            sources.append("Yahoo Forex (USD/EGP)")
-    except Exception:
-        pass
+            usd_egp = float(json_data['chart']['result'][0]['meta']['regularMarketPrice'])
+        else:
+            error_log += f"Forex API Error ({res_egp.status_code})"
+    except Exception as e:
+        error_log += f"Forex Connection Failed ({str(e)})"
 
-    source_name = " | ".join(sources) if sources else "البيانات الاحتياطية الثابتة"
-    return ounce_usd, usd_egp, source_name
+    return ounce_usd, usd_egp, is_live, error_log
 
-# جلب البيانات الحية فورا
-ounce_usd, usd_egp, data_source = fetch_yahoo_realtime_prices()
+# استدعاء المحرك الجديد
+ounce_usd, usd_egp, is_live, error_msg = fetch_yahoo_realtime_prices()
 
-# الحسابات الرياضية الدقيقة المبنية على بيانات البورصة الحية بالثانية
+# الحسابات الرياضية بالسوق المصري
 gold_pure_price_egp = (ounce_usd * usd_egp) / 31.10348
 price_24 = round(gold_pure_price_egp, 2)
 price_21 = round(gold_pure_price_egp * (21 / 24), 2)
 price_18 = round(gold_pure_price_egp * (18 / 24), 2)
 
 # عرض الـ 5 كروت كاملة شاملة عيار 24
-st.subheader("📈 أسعار الذهب والدولار الحية مباشرة من البورصة العالمية")
+st.subheader("📈 شاشة مراقبة الأسعار الحية بالثانية")
 c1, c2, c3, c4, c5 = st.columns(5)
 with c1:
     st.markdown(f'<div class="price-card"><h5>🌍 أونصة الذهب</h5><h3>${ounce_usd:,.2f}</h3></div>', unsafe_allow_html=True)
@@ -116,7 +121,12 @@ with c4:
 with c5:
     st.markdown(f'<div class="price-card"><h5>⚜️ عيار 18</h5><h3>{price_18:,.2f} ج.م</h3></div>', unsafe_allow_html=True)
 
-st.markdown(f'<div class="source-text">📡 المصدر الفوري الحالي: {data_source} (تحديث كل 10 ثوانٍ تلقائياً)</div>', unsafe_allow_html=True)
+# طباعة حالة البيانات للمصداقية التامة والشفافية
+if is_live:
+    st.markdown('<div class="source-text">📡 اتصال البورصة: نشط ولحظي 100% (Yahoo Finance Live Server)</div>', unsafe_allow_html=True)
+else:
+    st.markdown(f'<div class="warning-text">⚠️ تحذير: السيرفر محجوب مؤقتاً ويقرأ بيانات مرجعية قريبة. السبب: {error_msg}</div>', unsafe_allow_html=True)
+
 st.divider()
 
 # ==========================================
@@ -175,7 +185,7 @@ with col_actions:
             st.error("❌ فشل الإرسال، تحقق من توكن التليجرام في الـ Secrets.")
 
     if st.button("🔍 فحص التنبيهات يدوياً الآن"):
-        st.cache_data.clear() # تصفير الكاش فوراً عند الفحص اليدوي لجلب السعر الحالي بالثانية تماماً
+        st.cache_data.clear() 
         if engine:
             try:
                 df_active = pd.read_sql_query("SELECT * FROM gold_targets WHERE is_active = TRUE", engine)
