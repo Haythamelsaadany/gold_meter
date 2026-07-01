@@ -126,7 +126,7 @@ price_21 = round(gold_pure_price_egp * (21 / 24), 2)
 price_18 = round(gold_pure_price_egp * (18 / 24), 2)
 
 # ==========================================
-# 4. ترقية: حساب مؤشر الاتجاه (Trend Indicator) عبر الـ Session State
+# 4. حساب مؤشر الاتجاه (Trend Indicator) عبر الـ Session State
 # ==========================================
 if 'last_price' not in st.session_state:
     st.session_state.last_price = ounce_usd
@@ -136,12 +136,12 @@ if ounce_usd > st.session_state.last_price:
 elif ounce_usd < st.session_state.last_price:
     trend_markup = f'<div class="trend-text" style="color:#ff3333;">📉 حركة السعر الحالية: هبوط (-${round(st.session_state.last_price - ounce_usd, 2)}) مقارنة بالقراءة السابقة</div>'
 else:
-    trend_markup = f'<div class="trend-text" style="color:#ffcc00;">➡️ حركة السعر الحالية: استقرار ثبات سعري لحظي</div>'
+    trend_markup = f'<div class="trend-text" style="color:#ffcc00;">➡️ حركة السعر الحالية: استقرار وثبات سعري لحظي</div>'
 
 st.session_state.last_price = ounce_usd
 
 # ==========================================
-# 5. ترقية: لوحة جانبية ذكية (Sidebar Calculator) لرفع جودة الـ UI
+# 5. اللوحة الجانبية الحاسبة (مع تعديل الاسم الكريم)
 # ==========================================
 with st.sidebar:
     st.markdown("### 🧮 حاسبة الاستثمار السريع")
@@ -156,14 +156,14 @@ with st.sidebar:
     st.success(f"✨ **عيار 21:** يعادل حوالي `{calc_21}` جرام")
     st.warning(f"⚜️ **عيار 18:** يعادل حوالي `{calc_18}` جرام")
     st.divider()
-    st.caption("تم التطوير بواسطة م/ هيثم الصعيدي لمنظومة Gold Meter Pro")
+    st.caption("تم التطوير بواسطة م/ هيثم السعدني لمنظومة Gold Meter Pro")
 
 # ==========================================
 # 6. تقسيم التطبيق إلى تابات احترافية (Tabs)
 # ==========================================
 tab_monitor, tab_news, tab_telegram_setup = st.tabs([
     "📊 شاشة المراقبة والتنبيهات", 
-    "📰 الأخبار والتوصيات الرياضية الفنية", 
+    "📰 الأخبار والتوصيات الفنية", 
     "🛠️ دليل تشغيل بوت التليجرام"
 ])
 
@@ -216,7 +216,6 @@ with tab_monitor:
                             {"carat": carat_choice, "type": target_type, "price": target_price, "chat_id": user_chat_id}
                         )
                     st.success(f"✅ تم حفظ هدف الـ {target_type} بنجاح!")
-                    st.json({"status": "success", "target": target_price})
                     time.sleep(1)
                     st.rerun()
                 except Exception as e:
@@ -302,17 +301,15 @@ with tab_monitor:
             pass
 
 # ------------------------------------------
-# محتوى التاب الثاني: الأخبار والتوصيات الفنية (ترقية الحساب الديناميكي)
+# محتوى التاب الثاني: الأخبار والتوصيات الفنية الديناميكية
 # ------------------------------------------
 with tab_news:
     st.subheader("📰 شريط أخبار الذهب الفني")
     
-    # حساب نقاط الدعم والمقاومة ديناميكياً بناء على السعر اللحظي الحالي للأونصة
     pivot_global = ounce_usd
     support_global = round(ounce_usd - 20, 2)
     resistance_global = round(ounce_usd + 20, 2)
     
-    # حساب الدعم والمقاومة محلياً لعيار 21 لتعود بالفائدة الفورية للمستخدم
     support_egp_21 = round((support_global * usd_egp * 21/24) / 31.10348, 2)
     resistance_egp_21 = round((resistance_global * usd_egp * 21/24) / 31.10348, 2)
 
@@ -332,7 +329,7 @@ with tab_news:
         """, unsafe_allow_html=True)
         
     with col_news_right:
-        st.markdown("### 🎯 التوصيات الرياضية الحسابية (تتغير ديناميكياً)")
+        st.markdown("### 🎯 التوصيات الحسابية (تتغير ديناميكياً)")
         st.markdown(f"""
         <div class="rec-card">
             <h5>🎯 <b>نقطة الارتكاز العالمية الحالية:</b> ${pivot_global:,.2f}</h5>
@@ -360,7 +357,7 @@ with tab_telegram_setup:
     * في خانة البحث أكتب اسم البوت العالمي الموثق: `@userinfobot`.
     * اضغط على زر **Start**.
     * سيقوم البوت فوراً بإرسال بياناتك، انسخ الرقم المكتوب أمام خانة **Id** (مثال: `452445185`).
-    * هذا هو الرقم الذي تضعه في خانة **Telegram Chat ID** داخل شاشة المراقبة.
+    * هذا هو الرقم الذي تضعه in خانة **Telegram Chat ID** داخل شاشة المراقبة.
     
     ### 2️⃣ ثانياً: إعداد البوت الخاص بك بالكامل (في الـ Secrets)
     إذا كنت تريد تشغيل بوت خاص بك بالكامل ليرسل التنبيهات:
