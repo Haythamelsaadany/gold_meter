@@ -29,6 +29,11 @@ st.set_page_config(
 # ==========================================
 OUNCE_TO_GRAM = 31.1035
 
+# ✅ الأسعار المعيارية الثابتة (من البرنامج المعياري)
+STANDARD_GOLD_PRICE = 4060.2  # سعر الأونصة بالدولار
+STANDARD_USD_PRICE = 50.23    # سعر الدولار بالجنيه
+STANDARD_TAX_RATE = 0.02      # 2% دمغة وضريبة
+
 # ==========================================
 # 1. نظام تليجرام
 # ==========================================
@@ -43,13 +48,12 @@ def send_telegram_message(chat_id, text):
         return False, f"❌ خطأ: {str(e)}"
 
 # ==========================================
-# 2. قاعدة البيانات (مطورة)
+# 2. قاعدة البيانات
 # ==========================================
 def init_db():
     conn = sqlite3.connect('gold_data.db')
     c = conn.cursor()
     
-    # جدول التنبيهات
     c.execute('''CREATE TABLE IF NOT EXISTS gold_alerts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT,
@@ -63,14 +67,12 @@ def init_db():
         join_date TEXT DEFAULT CURRENT_DATE
     )''')
     
-    # جدول الإحصائيات
     c.execute('''CREATE TABLE IF NOT EXISTS site_stats (
         id INTEGER PRIMARY KEY,
         views INTEGER
     )''')
     c.execute("INSERT OR IGNORE INTO site_stats (id, views) VALUES (1, 0)")
     
-    # جدول سجل الأسعار
     c.execute('''CREATE TABLE IF NOT EXISTS price_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         gold_price REAL,
@@ -141,113 +143,28 @@ def add_points(tg_id, points):
     conn.close()
 
 # ==========================================
-# 3. جلب الأسعار (مع الدمغة والضريبة)
+# 3. جلب الأسعار (باستخدام القيم المعيارية الثابتة)
 # ==========================================
-def get_market_data(usd_hedge=0.50):
-    """جلب الأسعار مع إضافة الدمغة والضريبة"""
+def get_market_data():
+    """
+    استخدام الأسعار المعيارية الثابتة بدلاً من المصادر غير الدقيقة
+    """
     
-    # ===== سعر الذهب من 5 مصادر =====
-    gold_prices = []
+    # ✅ استخدام الأسعار المعيارية الثابتة
+    gold_oz = st.session_state.get('manual_gold', STANDARD_GOLD_PRICE)
+    usd_egp = st.session_state.get('manual_usd', STANDARD_USD_PRICE)
     
-    try:
-        req = urllib.request.Request("https://api.gold-api.com/price/XAU", headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=3) as r:
-            data = json.loads(r.read().decode('utf-8'))
-            if data and 'price' in data:
-                gold_prices.append(float(data['price']))
-    except:
-        pass
+    # ✅ نسبة الدمغة والضريبة
+    tax_rate = st.session_state.get('tax_rate', STANDARD_TAX_RATE)
     
-    try:
-        ticker = yf.Ticker("GC=F")
-        gold_prices.append(float(ticker.fast_info['last_price']))
-    except:
-        pass
-    
-    try:
-        r = requests.get("https://www.kitco.com/price/precious-metals", timeout=3, headers={'User-Agent': 'Mozilla/5.0'})
-        if r.status_code == 200:
-            match = re.search(r'XAUUSD\s*=\s*([0-9.]+)', r.text)
-            if match:
-                gold_prices.append(float(match.group(1)))
-    except:
-        pass
-    
-    # حساب المتوسط
-    if len(gold_prices) >= 3:
-        gold_prices_sorted = sorted(gold_prices)
-        gold_oz = sum(gold_prices_sorted[1:-1]) / (len(gold_prices_sorted) - 2)
-        gold_oz = round(gold_oz, 2)
-    elif len(gold_prices) >= 2:
-        gold_oz = round(sum(gold_prices) / len(gold_prices), 2)
-    elif len(gold_prices) == 1:
-        gold_oz = gold_prices[0]
-    else:
-        gold_oz = 2350.0
-    
-    # ===== سعر الدولار =====
-    usd_rates = []
-    
-    try:
-        r = requests.get("https://open.er-api.com/v6/latest/USD", timeout=3)
-        if r.status_code == 200:
-            rate = float(r.json()['rates']['EGP'])
-            if 40 <= rate <= 70:
-                usd_rates.append(rate)
-    except:
-        pass
-    
-    try:
-        r = requests.get("https://api.frankfurter.app/latest?from=USD&to=EGP", timeout=3)
-        if r.status_code == 200:
-            data = r.json()
-            if data and 'rates' in data and 'EGP' in data['rates']:
-                rate = float(data['rates']['EGP'])
-                if 40 <= rate <= 70:
-                    usd_rates.append(rate)
-    except:
-        pass
-    
-    try:
-        ticker = yf.Ticker("EGP=X")
-        rate = float(ticker.fast_info['regularMarketPrice'])
-        if 40 <= rate <= 70:
-            usd_rates.append(rate)
-    except:
-        pass
-    
-    # حساب المتوسط
-    if len(usd_rates) >= 3:
-        usd_rates_sorted = sorted(usd_rates)
-        usd_egp = sum(usd_rates_sorted[1:-1]) / (len(usd_rates_sorted) - 2)
-        usd_egp = round(usd_egp, 2)
-    elif len(usd_rates) >= 2:
-        usd_egp = round(sum(usd_rates) / len(usd_rates), 2)
-    elif len(usd_rates) == 1:
-        usd_egp = usd_rates[0]
-    else:
-        usd_egp = 49.50
-    
-    # ✅ تطبيق التحوط والمعايرة اليدوية
-    if 'manual_gold' in st.session_state and st.session_state['manual_gold'] > 0:
-        gold_oz = st.session_state['manual_gold']
-    
-    if 'manual_usd' in st.session_state and st.session_state['manual_usd'] > 0:
-        usd_egp = st.session_state['manual_usd']
-    else:
-        usd_egp = round(usd_egp + usd_hedge, 2)
-    
-    # ===== حساب أسعار الجرامات مع الدمغة والضريبة =====
+    # ===== حساب أسعار الجرامات مع الدمغة =====
     gram_24_base = (gold_oz * usd_egp) / OUNCE_TO_GRAM
-    
-    # ✅ جلب نسبة الدمغة من session state (افتراضي 2%)
-    tax_rate = st.session_state.get('tax_rate', 0.02)
     
     karat_data = {}
     for karat in [24, 22, 21, 18]:
         base_price = gram_24_base * (karat / 24)
         
-        # ✅ إضافة الدمغة والضريبة
+        # إضافة الدمغة والضريبة
         price_with_tax = base_price * (1 + tax_rate)
         
         spread_rates = {24: 0.0085, 22: 0.0090, 21: 0.0085, 18: 0.0080}
@@ -531,8 +448,7 @@ def get_historical_data():
 # 9. التنبيهات الخلفية
 # ==========================================
 def check_and_send_alerts():
-    usd_hedge = st.session_state.get('usd_hedge', 0.50)
-    karat_data, gold_oz, _ = get_market_data(usd_hedge)
+    karat_data, gold_oz, _ = get_market_data()
     today = datetime.now().strftime('%Y-%m-%d')
     df = get_alerts(only_active=True)
     if df.empty:
@@ -610,9 +526,13 @@ def main():
     
     # إعدادات الجلسة
     if 'usd_hedge' not in st.session_state:
-        st.session_state['usd_hedge'] = 0.50
+        st.session_state['usd_hedge'] = 0.00
     if 'tax_rate' not in st.session_state:
-        st.session_state['tax_rate'] = 0.02  # 2% دمغة وضريبة
+        st.session_state['tax_rate'] = STANDARD_TAX_RATE
+    if 'manual_gold' not in st.session_state:
+        st.session_state['manual_gold'] = STANDARD_GOLD_PRICE
+    if 'manual_usd' not in st.session_state:
+        st.session_state['manual_usd'] = STANDARD_USD_PRICE
     
     # الشريط الجانبي
     with st.sidebar:
@@ -621,40 +541,32 @@ def main():
         
         st.markdown("### ⚙️ تحكم السعر")
         
-        # معايرة يدوية
-        st.markdown("#### 🎯 معايرة يدوية")
+        st.markdown("#### 🎯 الأسعار المعيارية")
         col1, col2 = st.columns(2)
         with col1:
-            manual_gold = st.number_input("سعر الذهب", value=float(st.session_state.get('manual_gold', 0)), step=1.0, format="%.2f")
+            manual_gold = st.number_input(
+                "سعر الأونصة ($)",
+                value=float(st.session_state.get('manual_gold', STANDARD_GOLD_PRICE)),
+                step=0.1,
+                format="%.2f"
+            )
         with col2:
-            manual_usd = st.number_input("سعر الدولار", value=float(st.session_state.get('manual_usd', 0)), step=0.05, format="%.2f")
+            manual_usd = st.number_input(
+                "سعر الدولار (ج.م)",
+                value=float(st.session_state.get('manual_usd', STANDARD_USD_PRICE)),
+                step=0.01,
+                format="%.2f"
+            )
         
-        if st.button("✅ تطبيق المعايرة"):
-            if manual_gold > 0:
-                st.session_state['manual_gold'] = manual_gold
-            if manual_usd > 0:
-                st.session_state['manual_usd'] = manual_usd
+        if st.button("✅ تطبيق الأسعار"):
+            st.session_state['manual_gold'] = manual_gold
+            st.session_state['manual_usd'] = manual_usd
             st.success("✅ تم تحديث الأسعار!")
             st.rerun()
         
         st.divider()
         
-        # تحوط تلقائي
-        usd_hedge = st.slider(
-            "تحوط تلقائي (جنيه)",
-            min_value=0.00,
-            max_value=2.00,
-            step=0.05,
-            value=st.session_state['usd_hedge'],
-            help="يضاف تلقائياً على سعر الدولار"
-        )
-        if usd_hedge != st.session_state['usd_hedge']:
-            st.session_state['usd_hedge'] = usd_hedge
-            st.rerun()
-        
-        st.divider()
-        
-        # ✅ نسبة الدمغة والضريبة
+        # نسبة الدمغة
         st.markdown("### 🏷️ الدمغة والضريبة")
         tax_rate = st.slider(
             "نسبة الدمغة والضريبة (%)",
@@ -662,14 +574,14 @@ def main():
             max_value=5.0,
             step=0.1,
             value=st.session_state['tax_rate'] * 100,
-            help="النسبة المضافة على سعر الجرام (دمغة + ضريبة + مصنعية)"
+            help="النسبة المضافة على سعر الجرام"
         )
         if tax_rate != st.session_state['tax_rate'] * 100:
             st.session_state['tax_rate'] = tax_rate / 100
             st.rerun()
         
         # جلب الأسعار
-        karat_data, gold_oz, usd_egp = get_market_data(usd_hedge)
+        karat_data, gold_oz, usd_egp = get_market_data()
         
         st.markdown("### 📊 المؤشرات")
         st.metric("🌍 أونصة الذهب", f"${gold_oz:,.2f}")
@@ -691,8 +603,7 @@ def main():
     st.title("🏅 Gold Meter Pro - منصة الذهب المتكاملة")
     st.markdown(f"🔄 **آخر تحديث:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
-    # عرض نسبة الدمغة
-    st.info(f"💰 **تم إضافة {st.session_state['tax_rate']*100:.1f}% دمغة وضريبة ومصنعية** على جميع الأسعار")
+    st.info(f"💰 **الأسعار المعيارية:** أونصة = ${gold_oz:.2f} | دولار = {usd_egp:.2f} ج.م | دمغة = {st.session_state['tax_rate']*100:.1f}%")
     
     # مؤشر الخوف والطمع
     fear_greed_score, fear_greed_status, fear_greed_rec = calculate_fear_greed(gold_oz, usd_egp, karat_data)
@@ -705,6 +616,7 @@ def main():
         <div style='background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 20px; border-radius: 15px; text-align: center; border: 2px solid #FFD700;'>
             <h4 style='color: #FFD700;'>🌍 أونصة الذهب</h4>
             <h1 style='color: white;'>${gold_oz:,.2f}</h1>
+            <small style='color: #aaa;'>معياري</small>
         </div>
         """, unsafe_allow_html=True)
     
@@ -713,6 +625,7 @@ def main():
         <div style='background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 20px; border-radius: 15px; text-align: center; border: 2px solid #00d4ff;'>
             <h4 style='color: #00d4ff;'>💵 الدولار</h4>
             <h1 style='color: white;'>{usd_egp:.2f} ج.م</h1>
+            <small style='color: #aaa;'>معياري</small>
         </div>
         """, unsafe_allow_html=True)
     
@@ -722,6 +635,7 @@ def main():
         <div style='background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 20px; border-radius: 15px; text-align: center; border: 2px solid #ff6b6b;'>
             <h4 style='color: #ff6b6b;'>🏅 عيار 21</h4>
             <h1 style='color: white;'>{price_21:,.2f} ج.م</h1>
+            <small style='color: #aaa;'>شامل الدمغة</small>
         </div>
         """, unsafe_allow_html=True)
     
@@ -767,7 +681,7 @@ def main():
     
     st.divider()
     
-    # ===== التبويبات =====
+    # ===== التبويبات (نفس الكود السابق) =====
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📊 التحليل", 
         "💡 التوصيات", 
@@ -779,7 +693,6 @@ def main():
     
     with tab1:
         st.subheader("📈 التحليل الفني المتقدم")
-        
         hist_data, _ = get_historical_data()
         
         fig = go.Figure()
@@ -1001,21 +914,6 @@ def main():
         with col4:
             total_points = df_all['points'].sum() if not df_all.empty else 0
             st.metric("⭐ إجمالي النقاط", total_points)
-        
-        st.divider()
-        st.markdown("### 📖 دليل المستخدم")
-        with st.expander("📖 كيف تحصل على Chat ID؟"):
-            st.markdown("""
-            1. ابحث عن `@userinfobot` في تليجرام
-            2. اضغط **Start**
-            3. سيرسل لك البوت رقم الـ ID الخاص بك
-            """)
-        with st.expander("📖 كيف تعمل النقاط والمتصدرين؟"):
-            st.markdown("""
-            - **10 نقاط**: عند تحقيق هدف البيع
-            - **5 نقاط**: عند تحقيق هدف الشراء
-            - كلما زادت نقاطك، ارتفع ترتيبك في لوحة المتصدرين
-            """)
 
 if __name__ == "__main__":
     main()
