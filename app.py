@@ -141,15 +141,14 @@ def add_points(tg_id, points):
     conn.close()
 
 # ==========================================
-# 3. جلب الأسعار (مع معايرة يدوية)
+# 3. جلب الأسعار (مع الدمغة والضريبة)
 # ==========================================
 def get_market_data(usd_hedge=0.50):
-    """جلب الأسعار مع إمكانية المعايرة اليدوية"""
+    """جلب الأسعار مع إضافة الدمغة والضريبة"""
     
     # ===== سعر الذهب من 5 مصادر =====
     gold_prices = []
     
-    # المصادر
     try:
         req = urllib.request.Request("https://api.gold-api.com/price/XAU", headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=3) as r:
@@ -238,31 +237,37 @@ def get_market_data(usd_hedge=0.50):
     else:
         usd_egp = round(usd_egp + usd_hedge, 2)
     
-    # ===== حساب أسعار الجرامات =====
+    # ===== حساب أسعار الجرامات مع الدمغة والضريبة =====
     gram_24_base = (gold_oz * usd_egp) / OUNCE_TO_GRAM
+    
+    # ✅ جلب نسبة الدمغة من session state (افتراضي 2%)
+    tax_rate = st.session_state.get('tax_rate', 0.02)
     
     karat_data = {}
     for karat in [24, 22, 21, 18]:
         base_price = gram_24_base * (karat / 24)
+        
+        # ✅ إضافة الدمغة والضريبة
+        price_with_tax = base_price * (1 + tax_rate)
+        
         spread_rates = {24: 0.0085, 22: 0.0090, 21: 0.0085, 18: 0.0080}
         spread = spread_rates.get(karat, 0.0085)
         
-        buy_price = base_price * (1 - spread/2)
-        sell_price = base_price * (1 + spread/2)
+        buy_price = price_with_tax * (1 - spread/2)
+        sell_price = price_with_tax * (1 + spread/2)
         
         karat_data[str(karat)] = {
             'buy': round(buy_price, 2),
             'sell': round(sell_price, 2),
-            'mid': round(base_price, 2)
+            'mid': round(price_with_tax, 2)
         }
     
     return karat_data, gold_oz, usd_egp
 
 # ==========================================
-# 4. تحليل المشاعر للأخبار (NLP بسيط)
+# 4. تحليل المشاعر للأخبار
 # ==========================================
 def sentiment_analysis(text):
-    """تحليل المشاعر للنص (بسيط وفعال)"""
     positive_words = ['صعود', 'ارتفاع', 'زيادة', 'قفزة', 'مكاسب', 'إيجابي', 'جيد', 'ممتاز', 'نمو', 'تحسن', 'ربح', 'نجاح']
     negative_words = ['هبوط', 'انخفاض', 'تراجع', 'كسر', 'خسائر', 'سلبي', 'سيء', 'ضغط', 'أزمة', 'انكماش', 'خطر']
     
@@ -281,10 +286,8 @@ def sentiment_analysis(text):
 # 5. مؤشر الخوف والطمع
 # ==========================================
 def calculate_fear_greed(gold_oz, usd_egp, karat_data):
-    """حساب مؤشر الخوف والطمع (0-100)"""
-    score = 50  # نقطة البداية محايدة
+    score = 50
     
-    # 1. تحليل سعر الذهب (30% من المؤشر)
     if gold_oz > 2450:
         score -= 15
     elif gold_oz > 2400:
@@ -296,7 +299,6 @@ def calculate_fear_greed(gold_oz, usd_egp, karat_data):
     else:
         score += 15
     
-    # 2. تحليل عيار 21 (30% من المؤشر)
     price_21 = karat_data.get('21', {}).get('mid', 0)
     if price_21 > 5900:
         score -= 12
@@ -309,7 +311,6 @@ def calculate_fear_greed(gold_oz, usd_egp, karat_data):
     else:
         score += 12
     
-    # 3. تحليل الدولار (20% من المؤشر)
     if usd_egp > 50.5:
         score -= 10
     elif usd_egp > 49.5:
@@ -319,7 +320,6 @@ def calculate_fear_greed(gold_oz, usd_egp, karat_data):
     else:
         score += 10
     
-    # 4. التقلبات (20% من المؤشر)
     try:
         ticker = yf.Ticker("GC=F")
         hist = ticker.history(period="5d")
@@ -334,10 +334,8 @@ def calculate_fear_greed(gold_oz, usd_egp, karat_data):
     except:
         pass
     
-    # التأكد من الحدود
     score = max(0, min(100, score))
     
-    # تصنيف
     if score >= 80:
         status = "🟢 طمع شديد"
         recommendation = "السوق في ذروة التفاؤل - كن حذراً"
@@ -357,16 +355,13 @@ def calculate_fear_greed(gold_oz, usd_egp, karat_data):
     return score, status, recommendation
 
 # ==========================================
-# 6. التوصيات المتقدمة (مطورة)
+# 6. التوصيات المتقدمة
 # ==========================================
 def get_advanced_analysis(gold_oz, usd_egp, karat_data):
-    """تحليل فني متكامل مع توصيات قوية"""
-    
     recommendations = []
     score = 0
     details = {}
     
-    # ===== 1. تحليل سعر الذهب =====
     if gold_oz > 2450:
         recommendations.append("🔴 **الذهب في منطقة مقاومة قوية جداً** (أعلى من 2450$)")
         score -= 15
@@ -388,7 +383,6 @@ def get_advanced_analysis(gold_oz, usd_egp, karat_data):
         score += 15
         details['gold'] = 'دعم قوي'
     
-    # ===== 2. تحليل عيار 21 =====
     price_21 = karat_data.get('21', {}).get('mid', 0)
     if price_21 > 5900:
         recommendations.append("🔴 **عيار 21 مرتفع جداً**")
@@ -411,14 +405,12 @@ def get_advanced_analysis(gold_oz, usd_egp, karat_data):
         score += 15
         details['karat21'] = 'جذاب جداً'
     
-    # ===== 3. التحليل الفني =====
     try:
         ticker = yf.Ticker("GC=F")
         hist = ticker.history(period="1mo")
         if not hist.empty and len(hist) > 20:
             close_prices = hist['Close']
             
-            # RSI
             delta = close_prices.diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -443,7 +435,6 @@ def get_advanced_analysis(gold_oz, usd_egp, karat_data):
                 score += 10
                 details['rsi'] = f"{current_rsi:.1f} (تشبع بيعي)"
             
-            # المتوسطات المتحركة
             ma7 = close_prices.rolling(window=7).mean().iloc[-1]
             ma20 = close_prices.rolling(window=20).mean().iloc[-1]
             current_price = close_prices.iloc[-1]
@@ -462,7 +453,6 @@ def get_advanced_analysis(gold_oz, usd_egp, karat_data):
     except:
         pass
     
-    # ===== 4. التوصية النهائية =====
     if score >= 25:
         recommendations.append("🌟 **توصية قوية جداً بالشراء**")
         details['final'] = 'شراء قوي'
@@ -479,7 +469,6 @@ def get_advanced_analysis(gold_oz, usd_egp, karat_data):
         recommendations.append("🔴 **توصية بالبيع**")
         details['final'] = 'بيع'
     
-    # نقاط الدعم والمقاومة
     recommendations.append("")
     recommendations.append("🎯 **نقاط الدعم والمقاومة:**")
     recommendations.append(f"   • دعم: ${gold_oz - 50:.0f} | مقاومة: ${gold_oz + 50:.0f}")
@@ -488,7 +477,7 @@ def get_advanced_analysis(gold_oz, usd_egp, karat_data):
     return recommendations, score, details
 
 # ==========================================
-# 7. الأخبار (مطورة مع تحليل المشاعر)
+# 7. الأخبار
 # ==========================================
 def fetch_all_news():
     all_news = []
@@ -505,7 +494,6 @@ def fetch_all_news():
             feed = feedparser.parse(url)
             if feed.entries:
                 for entry in feed.entries[:3]:
-                    # تحليل المشاعر
                     sentiment, sentiment_score = sentiment_analysis(entry.title + " " + entry.get('summary', ''))
                     
                     all_news.append({
@@ -519,12 +507,11 @@ def fetch_all_news():
         except:
             continue
     
-    # ترتيب حسب التأثير
     all_news.sort(key=lambda x: x['sentiment_score'], reverse=True)
     return all_news[:15]
 
 # ==========================================
-# 8. الرسم البياني المتقدم
+# 8. الرسم البياني
 # ==========================================
 @st.cache_data(ttl=300)
 def get_historical_data():
@@ -564,9 +551,7 @@ def check_and_send_alerts():
         current = karat_data.get(karat, {}).get('mid', 0)
         
         if current >= high and last_alerted != today:
-            # إضافة نقاط للمستخدم
             add_points(tg_id, 10)
-            
             alert_text = f"""🚀 *تنبيه صعود الذهب!*
 
 👤 المستخدم: {username}
@@ -582,7 +567,6 @@ def check_and_send_alerts():
                 msgs.append(f"✅ تنبيه لـ {username}")
         elif current <= low and last_alerted != today:
             add_points(tg_id, 5)
-            
             alert_text = f"""📉 *تنبيه هبوط الذهب!*
 
 👤 المستخدم: {username}
@@ -617,16 +601,18 @@ def start_background_checker():
         st.session_state.checker_running = True
 
 # ==========================================
-# 10. الواجهة الرئيسية (مطورة)
+# 10. الواجهة الرئيسية
 # ==========================================
 def main():
     init_db()
     start_background_checker()
     views = update_and_get_views()
     
-    # إعدادات التحوط
+    # إعدادات الجلسة
     if 'usd_hedge' not in st.session_state:
         st.session_state['usd_hedge'] = 0.50
+    if 'tax_rate' not in st.session_state:
+        st.session_state['tax_rate'] = 0.02  # 2% دمغة وضريبة
     
     # الشريط الجانبي
     with st.sidebar:
@@ -666,12 +652,29 @@ def main():
             st.session_state['usd_hedge'] = usd_hedge
             st.rerun()
         
+        st.divider()
+        
+        # ✅ نسبة الدمغة والضريبة
+        st.markdown("### 🏷️ الدمغة والضريبة")
+        tax_rate = st.slider(
+            "نسبة الدمغة والضريبة (%)",
+            min_value=0.0,
+            max_value=5.0,
+            step=0.1,
+            value=st.session_state['tax_rate'] * 100,
+            help="النسبة المضافة على سعر الجرام (دمغة + ضريبة + مصنعية)"
+        )
+        if tax_rate != st.session_state['tax_rate'] * 100:
+            st.session_state['tax_rate'] = tax_rate / 100
+            st.rerun()
+        
         # جلب الأسعار
         karat_data, gold_oz, usd_egp = get_market_data(usd_hedge)
         
         st.markdown("### 📊 المؤشرات")
         st.metric("🌍 أونصة الذهب", f"${gold_oz:,.2f}")
         st.metric("💵 الدولار", f"{usd_egp:.2f} ج.م")
+        st.metric("📊 الدمغة", f"{st.session_state['tax_rate']*100:.1f}%")
         
         st.divider()
         st.markdown("### 💎 الجرامات")
@@ -688,10 +691,13 @@ def main():
     st.title("🏅 Gold Meter Pro - منصة الذهب المتكاملة")
     st.markdown(f"🔄 **آخر تحديث:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     
+    # عرض نسبة الدمغة
+    st.info(f"💰 **تم إضافة {st.session_state['tax_rate']*100:.1f}% دمغة وضريبة ومصنعية** على جميع الأسعار")
+    
     # مؤشر الخوف والطمع
     fear_greed_score, fear_greed_status, fear_greed_rec = calculate_fear_greed(gold_oz, usd_egp, karat_data)
     
-    # بطاقات الأسعار مع المؤشرات
+    # بطاقات الأسعار
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -720,7 +726,6 @@ def main():
         """, unsafe_allow_html=True)
     
     with col4:
-        # مؤشر الخوف والطمع
         color = "#00ff88" if fear_greed_score >= 60 else "#ffd93d" if fear_greed_score >= 40 else "#ff6b6b"
         st.markdown(f"""
         <div style='background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 20px; border-radius: 15px; text-align: center; border: 2px solid {color};'>
@@ -733,7 +738,7 @@ def main():
     st.divider()
     
     # ===== أسعار الشراء والبيع =====
-    st.markdown("### 💰 أسعار الشراء والبيع")
+    st.markdown("### 💰 أسعار الشراء والبيع (شاملة الدمغة)")
     
     cols = st.columns(4)
     for i, k in enumerate(['24', '22', '21', '18']):
@@ -775,7 +780,6 @@ def main():
     with tab1:
         st.subheader("📈 التحليل الفني المتقدم")
         
-        # الرسم البياني
         hist_data, _ = get_historical_data()
         
         fig = go.Figure()
@@ -787,7 +791,6 @@ def main():
             line=dict(color='#FFD700', width=2)
         ))
         
-        # المتوسطات المتحركة
         if len(hist_data) > 7:
             ma7 = hist_data['Close'].rolling(window=7).mean()
             ma20 = hist_data['Close'].rolling(window=20).mean()
@@ -826,7 +829,6 @@ def main():
         )
         st.plotly_chart(fig, use_container_width=True)
         
-        # إحصائيات سريعة
         col1, col2, col3, col4 = st.columns(4)
         if len(hist_data) > 1:
             current = hist_data['Close'].iloc[-1]
@@ -903,7 +905,6 @@ def main():
         
         all_news = fetch_all_news()
         if all_news:
-            # إحصائيات المشاعر
             positive = sum(1 for n in all_news if 'إيجابي' in n['sentiment'])
             negative = sum(1 for n in all_news if 'سلبي' in n['sentiment'])
             neutral = sum(1 for n in all_news if 'محايد' in n['sentiment'])
@@ -935,7 +936,6 @@ def main():
         
         df_all = get_alerts(only_active=False)
         if not df_all.empty:
-            # ترتيب حسب النقاط
             top_users = df_all.nlargest(10, 'points')[['username', 'points', 'join_date']]
             top_users.columns = ['المستخدم', 'النقاط', 'تاريخ الانضمام']
             
