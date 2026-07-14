@@ -11,12 +11,13 @@ import urllib.request
 import threading
 from datetime import datetime, timedelta
 import plotly.graph_objects as go
+from streamlit_autorefresh import st_autorefresh
 
 # ==========================================
 # إعدادات الصفحة
 # ==========================================
 st.set_page_config(
-    page_title="🏅 Gold Meter Pro",
+    page_title="🏅 Gold Meter Pro - تحديث لحظي",
     layout="wide",
     page_icon="🏅"
 )
@@ -27,6 +28,7 @@ st.set_page_config(
 OUNCE_TO_GRAM = 31.1035
 TAX_RATE = 0.0225  # 2.25% دمغة وضريبة (داخلية)
 GOLD_HEDGE = -5.0  # خصم 5 دولار من سعر الذهب
+REFRESH_INTERVAL = 5  # تحديث تلقائي كل 5 ثواني
 
 # ==========================================
 # 1. نظام تليجرام
@@ -118,10 +120,11 @@ def delete_user_alerts(tg_id):
     conn.close()
 
 # ==========================================
-# 3. جلب الأسعار مع تحديث لحظي للدولار
+# 3. جلب الأسعار مع تحديث لحظي
 # ==========================================
+@st.cache_data(ttl=5)
 def get_market_data():
-    """جلب الأسعار من مصادر متعددة مع تحديث لحظي للدولار"""
+    """جلب الأسعار من مصادر متعددة مع تحديث لحظي"""
     
     gold_prices = []
     
@@ -165,7 +168,7 @@ def get_market_data():
     else:
         gold_oz = 2350.0
     
-    # ✅ خصم 5 دولار من سعر الذهب
+    # خصم 5 دولار من سعر الذهب
     gold_oz = round(gold_oz + GOLD_HEDGE, 2)
     
     # ===== سعر الدولار (تحديث لحظي من مصادر متعددة) =====
@@ -178,7 +181,6 @@ def get_market_data():
             rate = float(r.json()['rates']['EGP'])
             if 40 <= rate <= 70:
                 usd_rates.append(rate)
-                print(f"✅ ExchangeRate: {rate:.2f}")
     except:
         pass
     
@@ -191,7 +193,6 @@ def get_market_data():
                 rate = float(data['rates']['EGP'])
                 if 40 <= rate <= 70:
                     usd_rates.append(rate)
-                    print(f"✅ Frankfurter: {rate:.2f}")
     except:
         pass
     
@@ -201,7 +202,6 @@ def get_market_data():
         rate = float(ticker.fast_info['regularMarketPrice'])
         if 40 <= rate <= 70:
             usd_rates.append(rate)
-            print(f"✅ Yahoo USD: {rate:.2f}")
     except:
         pass
     
@@ -219,11 +219,10 @@ def get_market_data():
                 rate = float(match.group(1))
                 if 40 <= rate <= 70:
                     usd_rates.append(rate)
-                    print(f"✅ Investing.com: {rate:.2f}")
     except:
         pass
     
-    # حساب متوسط الدولار (بأخذ المتوسط الحسابي)
+    # حساب متوسط الدولار
     if len(usd_rates) >= 3:
         usd_rates_sorted = sorted(usd_rates)
         usd_egp = sum(usd_rates_sorted[1:-1]) / (len(usd_rates_sorted) - 2)
@@ -235,11 +234,8 @@ def get_market_data():
     else:
         usd_egp = 49.50
     
-    # ✅ حذف التحوط الثابت للدولار (أصبح يعتمد على المصادر فقط)
-    # نضيف تحوط بسيط جداً 0.05 فقط للتعديل
+    # إضافة تحوط بسيط جداً 0.05 فقط للتعديل
     usd_egp = round(usd_egp + 0.05, 2)
-    
-    print(f"🎯 سعر الدولار النهائي: {usd_egp:.2f} ج.م")
     
     # ===== حساب أسعار الجرامات مع 2.25% دمغة =====
     gram_24_base = (gold_oz * usd_egp) / OUNCE_TO_GRAM
@@ -518,9 +514,13 @@ def start_background_checker():
         st.session_state.checker_running = True
 
 # ==========================================
-# 9. الواجهة الرئيسية
+# 9. الواجهة الرئيسية مع التحديث التلقائي
 # ==========================================
 def main():
+    # ===== التحديث التلقائي =====
+    # Refresh الصفحة كل 5 ثواني
+    st_autorefresh(interval=REFRESH_INTERVAL * 1000, key="auto_refresh")
+    
     init_db()
     start_background_checker()
     views = update_and_get_views()
@@ -530,9 +530,10 @@ def main():
     # حساب مؤشر الخوف والطمع
     fear_score, fear_level, fear_desc, fear_rec = get_fear_greed_index(gold_oz, usd_egp, karat_data)
     
-    # الشريط الجانبي
+    # ===== الشريط الجانبي =====
     with st.sidebar:
-        st.title("🏅 Gold Meter")
+        st.image("https://img.icons8.com/color/96/000000/gold-bars.png", width=80)
+        st.title("🏅 Gold Meter Pro")
         
         st.markdown("### 📊 المؤشرات")
         st.metric("🌍 الذهب", f"${gold_oz:,.2f}")
@@ -550,26 +551,65 @@ def main():
         st.caption(fear_desc)
         st.caption(f"💡 {fear_rec}")
         
-        st.caption(f"👁️ زوار: {views}")
-        st.caption("⏱️ تحديث لحظي")
+        st.divider()
+        
+        # ===== زر التحديث اليدوي =====
+        if st.button("🔄 تحديث يدوي", type="primary", use_container_width=True):
+            st.cache_data.clear()
+            st.success("✅ تم تحديث الأسعار!")
+            time.sleep(0.5)
+            st.rerun()
+        
+        st.caption(f"👁️ زوار اليوم: {views}")
+        st.caption(f"⏱️ تحديث تلقائي كل {REFRESH_INTERVAL} ثواني")
         st.caption("📊 4 مصادر للدولار")
     
-    # المحتوى الرئيسي
+    # ===== المحتوى الرئيسي =====
     st.title("🏅 Gold Meter - منصة الذهب")
+    
+    # عرض وقت آخر تحديث
+    st.info(f"🔄 آخر تحديث: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (تلقائي كل {REFRESH_INTERVAL} ثانية)")
     
     # بطاقات الأسعار
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("🌍 أونصة الذهب", f"${gold_oz:,.2f}")
+        st.markdown(f"""
+        <div style='background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 20px; border-radius: 15px; text-align: center; border: 2px solid #FFD700;'>
+            <h4 style='color: #FFD700;'>🌍 أونصة الذهب</h4>
+            <h1 style='color: white;'>${gold_oz:,.2f}</h1>
+            <small style='color: #00ff88;'>تحديث لحظي</small>
+        </div>
+        """, unsafe_allow_html=True)
+    
     with col2:
-        st.metric("💵 الدولار (لحظي)", f"{usd_egp:.2f} ج.م")
+        st.markdown(f"""
+        <div style='background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 20px; border-radius: 15px; text-align: center; border: 2px solid #00d4ff;'>
+            <h4 style='color: #00d4ff;'>💵 الدولار</h4>
+            <h1 style='color: white;'>{usd_egp:.2f} ج.م</h1>
+            <small style='color: #ffd93d;'>4 مصادر</small>
+        </div>
+        """, unsafe_allow_html=True)
+    
     with col3:
         price_21 = karat_data.get('21', {}).get('mid', 0)
-        st.metric("🏅 عيار 21", f"{price_21:,.2f} ج.م")
+        st.markdown(f"""
+        <div style='background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 20px; border-radius: 15px; text-align: center; border: 2px solid #ff6b6b;'>
+            <h4 style='color: #ff6b6b;'>🏅 عيار 21</h4>
+            <h1 style='color: white;'>{price_21:,.2f} ج.م</h1>
+            <small style='color: #888;'>شامل الدمغة</small>
+        </div>
+        """, unsafe_allow_html=True)
+    
     with col4:
-        color = "🟢" if fear_score >= 60 else "🟡" if fear_score >= 40 else "🔴"
-        st.metric("📊 مؤشر الخوف", f"{fear_score}/100", delta=f"{color} {fear_level}")
+        color = "#00ff88" if fear_score >= 60 else "#ffd93d" if fear_score >= 40 else "#ff6b6b"
+        st.markdown(f"""
+        <div style='background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 20px; border-radius: 15px; text-align: center; border: 2px solid {color};'>
+            <h4 style='color: {color};'>📊 مؤشر الخوف</h4>
+            <h1 style='color: white;'>{fear_score}</h1>
+            <small style='color: #888;'>{fear_level}</small>
+        </div>
+        """, unsafe_allow_html=True)
     
     st.divider()
     
@@ -584,30 +624,52 @@ def main():
     
     st.divider()
     
-    # أسعار الشراء والبيع
+    # ===== أسعار الشراء والبيع =====
     st.markdown("### 💰 أسعار الشراء والبيع")
     cols = st.columns(4)
     for i, k in enumerate(['24', '22', '21', '18']):
         data = karat_data.get(k, {})
         with cols[i]:
             st.markdown(f"""
-            **عيار {k}**
-            - شراء: {data.get('buy', 0):,.2f}
-            - بيع: {data.get('sell', 0):,.2f}
-            """)
+            <div style='background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 15px; border-radius: 12px; text-align: center; border: 1px solid #333;'>
+                <h3 style='color: #ffd93d;'>عيار {k}</h3>
+                <div style='display: flex; justify-content: space-around;'>
+                    <div>
+                        <small style='color: #aaa;'>شراء</small>
+                        <h4 style='color: #00ff88;'>{data.get('buy', 0):,.2f}</h4>
+                    </div>
+                    <div>
+                        <small style='color: #aaa;'>بيع</small>
+                        <h4 style='color: #ff6b6b;'>{data.get('sell', 0):,.2f}</h4>
+                    </div>
+                </div>
+                <small style='color: #888;'>الفرق: {round(data.get('sell', 0) - data.get('buy', 0), 2):.2f} ج.م</small>
+            </div>
+            """, unsafe_allow_html=True)
     
     st.divider()
     
-    # التبويبات
+    # ===== التبويبات =====
     tab1, tab2, tab3, tab4 = st.tabs(["📊 التحليل", "💡 التوصيات", "📰 الأخبار", "🔔 التنبيهات"])
     
     with tab1:
-        st.subheader("📈 أداء الذهب")
+        st.subheader("📈 أداء الذهب - آخر 30 يوم")
         hist_data, _ = get_historical_data()
         st.line_chart(hist_data['Close'])
+        
+        # إحصائيات
+        if not hist_data.empty:
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("📈 أعلى سعر", f"${hist_data['Close'].max():.2f}")
+            with col2:
+                st.metric("📉 أدنى سعر", f"${hist_data['Close'].min():.2f}")
+            with col3:
+                change = ((hist_data['Close'].iloc[-1] - hist_data['Close'].iloc[-2]) / hist_data['Close'].iloc[-2]) * 100 if len(hist_data) > 1 else 0
+                st.metric("📊 التغير اليومي", f"{change:+.2f}%")
     
     with tab2:
-        st.subheader("💡 التوصيات")
+        st.subheader("💡 التوصيات الذكية")
         recs, score = get_recommendations(gold_oz, karat_data)
         for rec in recs:
             if "🔴" in rec:
@@ -616,14 +678,40 @@ def main():
                 st.success(rec)
             else:
                 st.info(rec)
+        
+        st.divider()
+        st.markdown("### 🎯 استراتيجية التداول")
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.markdown(f"""
+            **🛡️ مناطق الدعم**
+            - دعم أول: ${gold_oz - 50:.0f}
+            - دعم ثاني: ${gold_oz - 100:.0f}
+            """)
+        with col2:
+            st.markdown(f"""
+            **🚀 مناطق المقاومة**
+            - مقاومة أولى: ${gold_oz + 50:.0f}
+            - مقاومة ثانية: ${gold_oz + 100:.0f}
+            """)
+        with col3:
+            st.markdown("""
+            **⚖️ نسب التخصيص**
+            - شراء: 30-40%
+            - احتفاظ: 40-50%
+            - بيع: 10-20%
+            """)
     
     with tab3:
-        st.subheader("📰 الأخبار")
+        st.subheader("📰 آخر أخبار الذهب والدولار")
         news = fetch_news()
-        for item in news:
-            st.markdown(f"🔹 [{item['title']}]({item['link']})")
-            st.caption(f"📰 {item['source']} | {item['published']}")
-            st.divider()
+        if news:
+            for item in news:
+                st.markdown(f"🔹 **[{item['title']}]({item['link']})**")
+                st.caption(f"📰 {item['source']} | 📅 {item['published']}")
+                st.divider()
+        else:
+            st.info("📰 جاري تحميل الأخبار...")
     
     with tab4:
         st.subheader("🔔 التنبيهات")
