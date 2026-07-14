@@ -25,7 +25,8 @@ st.set_page_config(
 # إعدادات ثابتة (داخلية)
 # ==========================================
 OUNCE_TO_GRAM = 31.1035
-TAX_RATE = 0.0225  # ✅ 2.25% دمغة وضريبة (داخلية - غير معروضة)
+TAX_RATE = 0.0225  # 2.25% دمغة وضريبة (داخلية)
+GOLD_HEDGE = 5.0   # ✅ 5 دولار تحوط لسعر الذهب
 
 # ==========================================
 # 1. نظام تليجرام
@@ -117,10 +118,10 @@ def delete_user_alerts(tg_id):
     conn.close()
 
 # ==========================================
-# 3. جلب الأسعار مع 2.25% دمغة + مؤشر الخوف
+# 3. جلب الأسعار مع تحوط الذهب
 # ==========================================
 def get_market_data():
-    """جلب الأسعار من مصادر متعددة مع إضافة 2.25% دمغة وضريبة (داخلية)"""
+    """جلب الأسعار من مصادر متعددة مع إضافة تحوط للذهب ودمغة"""
     
     gold_prices = []
     
@@ -162,6 +163,9 @@ def get_market_data():
         gold_oz = gold_prices[0]
     else:
         gold_oz = 2350.0
+    
+    # ✅ إضافة تحوط الذهب
+    gold_oz = round(gold_oz + GOLD_HEDGE, 2)
     
     # ===== سعر الدولار =====
     usd_rates = []
@@ -206,18 +210,18 @@ def get_market_data():
     else:
         usd_egp = 49.50
     
-    # إضافة تحوط اختياري
+    # إضافة تحوط اختياري للدولار
     usd_hedge = st.session_state.get('usd_hedge', 0.50)
     usd_egp = round(usd_egp + usd_hedge, 2)
     
-    # ===== حساب أسعار الجرامات مع 2.25% دمغة (داخلية) =====
+    # ===== حساب أسعار الجرامات مع 2.25% دمغة =====
     gram_24_base = (gold_oz * usd_egp) / OUNCE_TO_GRAM
     
     karat_data = {}
     for karat in [24, 22, 21, 18]:
         base_price = gram_24_base * (karat / 24)
         
-        # ✅ إضافة 2.25% دمغة وضريبة (داخلية - غير معروضة)
+        # إضافة 2.25% دمغة وضريبة (داخلية - غير معروضة)
         price_with_tax = base_price * (1 + TAX_RATE)
         
         spread_rates = {24: 0.0085, 22: 0.0090, 21: 0.0085, 18: 0.0080}
@@ -235,16 +239,12 @@ def get_market_data():
     return karat_data, gold_oz, usd_egp
 
 # ==========================================
-# 4. مؤشر الخوف والطمع (المطور)
+# 4. مؤشر الخوف والطمع
 # ==========================================
 def get_fear_greed_index(gold_oz, usd_egp, karat_data):
-    """
-    حساب مؤشر الخوف والطمع في سوق الذهب
-    المقياس من 0 إلى 100
-    """
-    score = 50  # نقطة البداية محايدة
+    score = 50
     
-    # 1. تحليل سعر الذهب (30% من المؤشر)
+    # 1. تحليل سعر الذهب (30%)
     if gold_oz > 2450:
         score -= 15
     elif gold_oz > 2400:
@@ -256,7 +256,7 @@ def get_fear_greed_index(gold_oz, usd_egp, karat_data):
     else:
         score += 15
     
-    # 2. تحليل عيار 21 (25% من المؤشر)
+    # 2. تحليل عيار 21 (25%)
     price_21 = karat_data.get('21', {}).get('mid', 0)
     if price_21 > 5900:
         score -= 12
@@ -269,7 +269,7 @@ def get_fear_greed_index(gold_oz, usd_egp, karat_data):
     else:
         score += 12
     
-    # 3. تحليل سعر الدولار (20% من المؤشر)
+    # 3. تحليل سعر الدولار (20%)
     if usd_egp > 50.5:
         score -= 10
     elif usd_egp > 49.5:
@@ -279,7 +279,7 @@ def get_fear_greed_index(gold_oz, usd_egp, karat_data):
     else:
         score += 10
     
-    # 4. تحليل التقلبات (Volatility) - 15% من المؤشر
+    # 4. تحليل التقلبات (15%)
     try:
         ticker = yf.Ticker("GC=F")
         hist = ticker.history(period="5d")
@@ -294,7 +294,7 @@ def get_fear_greed_index(gold_oz, usd_egp, karat_data):
     except:
         pass
     
-    # 5. تحليل الاتجاه (10% من المؤشر)
+    # 5. تحليل الاتجاه (10%)
     try:
         ticker = yf.Ticker("GC=F")
         hist = ticker.history(period="10d")
@@ -308,10 +308,8 @@ def get_fear_greed_index(gold_oz, usd_egp, karat_data):
     except:
         pass
     
-    # التأكد من الحدود
     score = max(0, min(100, score))
     
-    # تصنيف المؤشر
     if score >= 80:
         level = "🟢 طمع شديد"
         description = "السوق في ذروة التفاؤل - كن حذراً"
@@ -556,7 +554,6 @@ def main():
         price_21 = karat_data.get('21', {}).get('mid', 0)
         st.metric("🏅 عيار 21", f"{price_21:,.2f} ج.م")
     with col4:
-        # عرض مؤشر الخوف في البطاقة الرابعة
         color = "🟢" if fear_score >= 60 else "🟡" if fear_score >= 40 else "🔴"
         st.metric("📊 مؤشر الخوف", f"{fear_score}/100", delta=f"{color} {fear_level}")
     
