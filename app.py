@@ -168,7 +168,7 @@ def get_market_data():
     else:
         gold_oz = 2350.0
     
-    # خصم 5 دولار من سعر الذهب
+    # خصم 2 دولار من سعر الذهب
     gold_oz = round(gold_oz + GOLD_HEDGE, 2)
     
     # ===== سعر الدولار (تحديث لحظي من مصادر متعددة) =====
@@ -225,7 +225,7 @@ def get_market_data():
     # حساب متوسط الدولار
     if len(usd_rates) >= 3:
         usd_rates_sorted = sorted(usd_rates)
-        usd_egp = sum(usd_rates_sorted[1:-1]) / (len(usd_rates_sorted) - 2)
+        usd_egp = sum(usd_rates_sorted[1:-1]) / (len(usd_rates_sorted) - 1)
         usd_egp = round(usd_egp, 2)
     elif len(usd_rates) >= 2:
         usd_egp = round(sum(usd_rates) / len(usd_rates), 2)
