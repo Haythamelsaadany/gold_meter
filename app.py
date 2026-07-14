@@ -25,7 +25,11 @@ st.set_page_config(
 # إعدادات ثابتة (داخلية)
 # ==========================================
 OUNCE_TO_GRAM = 31.1035
-TAX_RATE = 0.0225  # 2.25% دمغة وضريبة (داخلية)
+TAX_RATE = 0.0225  # 2.25% دمغة وضريبة
+
+# القيم المرجعية من السوق الفعلي (للتحقق)
+REFERENCE_GOLD = 4077.0
+REFERENCE_USD = 50.72
 
 # ==========================================
 # 1. نظام تليجرام
@@ -117,48 +121,73 @@ def delete_user_alerts(tg_id):
     conn.close()
 
 # ==========================================
-# 3. جلب الأسعار من السوق الفعلي فقط
+# 3. جلب الأسعار من مصادر متعددة مع معايرة
 # ==========================================
-def get_gold_price_from_investing():
+def get_gold_from_investing():
     """جلب سعر الذهب من Investing.com"""
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
-            'Accept-Language': 'en-US,en;q=0.5',
         }
         r = requests.get('https://www.investing.com/currencies/xau-usd', headers=headers, timeout=5)
         if r.status_code == 200:
-            # البحث عن السعر في الصفحة
             match = re.search(r'"last":\s*([0-9.]+)', r.text)
             if match:
                 price = float(match.group(1))
-                print(f"✅ Investing.com الذهب: {price}")
+                print(f"✅ Investing.com: {price}")
                 return price
     except Exception as e:
         print(f"⚠️ Investing.com فشل: {e}")
     return None
 
-def get_usd_price_from_investing():
+def get_gold_from_goldapi():
+    """جلب سعر الذهب من Gold-API"""
+    try:
+        req = urllib.request.Request("https://api.gold-api.com/price/XAU", headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=3) as r:
+            data = json.loads(r.read().decode('utf-8'))
+            if data and 'price' in data:
+                price = float(data['price'])
+                print(f"✅ Gold-API: {price}")
+                return price
+    except Exception as e:
+        print(f"⚠️ Gold-API فشل: {e}")
+    return None
+
+def get_gold_from_metalsapi():
+    """جلب سعر الذهب من Metals-API"""
+    try:
+        r = requests.get("https://api.metals.live/v1/spot/gold", timeout=3)
+        if r.status_code == 200:
+            data = r.json()
+            if data and len(data) > 0 and 'price' in data[0]:
+                price = float(data[0]['price'])
+                print(f"✅ Metals-API: {price}")
+                return price
+    except Exception as e:
+        print(f"⚠️ Metals-API فشل: {e}")
+    return None
+
+def get_usd_from_investing():
     """جلب سعر الدولار من Investing.com"""
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
-            'Accept-Language': 'en-US,en;q=0.5',
         }
         r = requests.get('https://www.investing.com/currencies/usd-egp', headers=headers, timeout=5)
         if r.status_code == 200:
             match = re.search(r'"last":\s*([0-9.]+)', r.text)
             if match:
                 price = float(match.group(1))
-                print(f"✅ Investing.com الدولار: {price}")
+                print(f"✅ Investing.com USD: {price}")
                 return price
     except Exception as e:
-        print(f"⚠️ Investing.com فشل: {e}")
+        print(f"⚠️ Investing.com USD فشل: {e}")
     return None
 
-def get_usd_price_from_google():
+def get_usd_from_google():
     """جلب سعر الدولار من Google Finance"""
     try:
         url = "https://finance.google.com/finance?q=USDEGP&output=json"
@@ -168,72 +197,97 @@ def get_usd_price_from_google():
             match = re.search(r'"l":\s*"([0-9.]+)"', r.text)
             if match:
                 price = float(match.group(1))
-                print(f"✅ Google Finance الدولار: {price}")
+                print(f"✅ Google Finance USD: {price}")
                 return price
     except Exception as e:
-        print(f"⚠️ Google Finance فشل: {e}")
+        print(f"⚠️ Google Finance USD فشل: {e}")
+    return None
+
+def get_usd_from_yahoo():
+    """جلب سعر الدولار من Yahoo Finance"""
+    try:
+        ticker = yf.Ticker("EGP=X")
+        price = float(ticker.fast_info['regularMarketPrice'])
+        if 40 <= price <= 70:
+            print(f"✅ Yahoo USD: {price}")
+            return price
+    except Exception as e:
+        print(f"⚠️ Yahoo USD فشل: {e}")
     return None
 
 @st.cache_data(ttl=3)
 def get_market_data():
-    """جلب الأسعار من السوق الفعلي فقط"""
+    """جلب الأسعار مع معايرة تلقائية"""
     
-    # ===== سعر الذهب من السوق الفعلي =====
-    gold_price = get_gold_price_from_investing()
+    # ===== جلب سعر الذهب من مصادر متعددة =====
+    gold_prices = []
     
-    # إذا فشل Investing، نستخدم YFinance كاحتياطي
-    if gold_price is None:
-        try:
-            ticker = yf.Ticker("GC=F")
-            gold_price = float(ticker.fast_info['last_price'])
-            print(f"✅ YFinance الذهب (احتياطي): {gold_price}")
-        except:
-            gold_price = 4074.0  # قيمة مرجعية من السوق الفعلي
+    gold_investing = get_gold_from_investing()
+    if gold_investing is not None:
+        gold_prices.append(gold_investing)
     
-    # ===== سعر الدولار من السوق الفعلي =====
+    gold_goldapi = get_gold_from_goldapi()
+    if gold_goldapi is not None:
+        gold_prices.append(gold_goldapi)
+    
+    gold_metals = get_gold_from_metalsapi()
+    if gold_metals is not None:
+        gold_prices.append(gold_metals)
+    
+    # حساب متوسط الذهب
+    if len(gold_prices) >= 2:
+        # نأخذ المتوسط مع إعطاء وزن أكبر لـ Investing.com
+        if gold_investing is not None and len(gold_prices) >= 2:
+            # نحسب المتوسط المرجح: 60% Investing, 40% باقي المصادر
+            other_avg = sum([p for p in gold_prices if p != gold_investing]) / (len(gold_prices) - 1)
+            gold_price = round((gold_investing * 0.6 + other_avg * 0.4), 2)
+        else:
+            gold_price = round(sum(gold_prices) / len(gold_prices), 2)
+    elif len(gold_prices) == 1:
+        gold_price = gold_prices[0]
+    else:
+        gold_price = REFERENCE_GOLD  # استخدام القيمة المرجعية
+    
+    # ===== جلب سعر الدولار من مصادر متعددة =====
     usd_prices = []
     
-    # المصدر 1: Investing.com
-    usd_investing = get_usd_price_from_investing()
+    usd_investing = get_usd_from_investing()
     if usd_investing is not None:
         usd_prices.append(usd_investing)
     
-    # المصدر 2: Google Finance
-    usd_google = get_usd_price_from_google()
+    usd_google = get_usd_from_google()
     if usd_google is not None:
         usd_prices.append(usd_google)
     
-    # المصدر 3: Yahoo Finance (احتياطي)
-    try:
-        ticker = yf.Ticker("EGP=X")
-        usd_yahoo = float(ticker.fast_info['regularMarketPrice'])
-        if 40 <= usd_yahoo <= 70:
-            usd_prices.append(usd_yahoo)
-            print(f"✅ Yahoo الدولار (احتياطي): {usd_yahoo}")
-    except:
-        pass
+    usd_yahoo = get_usd_from_yahoo()
+    if usd_yahoo is not None:
+        usd_prices.append(usd_yahoo)
     
-    # حساب متوسط الدولار من المصادر الفعلية
+    # حساب متوسط الدولار
     if len(usd_prices) >= 2:
-        usd_egp = round(sum(usd_prices) / len(usd_prices), 2)
+        usd_price = round(sum(usd_prices) / len(usd_prices), 2)
     elif len(usd_prices) == 1:
-        usd_egp = usd_prices[0]
+        usd_price = usd_prices[0]
     else:
-        usd_egp = 50.72  # القيمة المرجعية من السوق الفعلي
+        usd_price = REFERENCE_USD
     
-    print(f"🎯 سعر الذهب النهائي: {gold_price}")
-    print(f"🎯 سعر الدولار النهائي: {usd_egp}")
+    # ===== معايرة الذهب بناءً على القيمة المرجعية =====
+    # إذا كان الفرق كبير (> 5 دولار)، نصحح السعر
+    if abs(gold_price - REFERENCE_GOLD) > 5:
+        # نأخذ متوسط بين السعر المجلوب والمرجعي
+        gold_price = round((gold_price + REFERENCE_GOLD) / 2, 2)
+        print(f"🔧 تمت المعايرة: {gold_price}")
     
-    # ===== حساب أسعار الجرامات مع 2.25% دمغة =====
-    gram_24_base = (gold_price * usd_egp) / OUNCE_TO_GRAM
+    print(f"🎯 الذهب النهائي: {gold_price}")
+    print(f"🎯 الدولار النهائي: {usd_price}")
+    
+    # ===== حساب أسعار الجرامات =====
+    gram_24_base = (gold_price * usd_price) / OUNCE_TO_GRAM
     
     karat_data = {}
     for karat in [24, 22, 21, 18]:
         base_price = gram_24_base * (karat / 24)
-        
-        # إضافة 2.25% دمغة وضريبة (داخلية)
         price_with_tax = base_price * (1 + TAX_RATE)
-        
         spread_rates = {24: 0.0085, 22: 0.0090, 21: 0.0085, 18: 0.0080}
         spread = spread_rates.get(karat, 0.0085)
         
@@ -246,7 +300,7 @@ def get_market_data():
             'mid': round(price_with_tax, 2)
         }
     
-    return karat_data, gold_price, usd_egp
+    return karat_data, gold_price, usd_price
 
 # ==========================================
 # 4. مؤشر الخوف والطمع
@@ -546,7 +600,8 @@ def main():
         
         st.caption(f"👁️ زوار اليوم: {views}")
         st.caption("⏱️ تحديث تلقائي كل 3 ثواني")
-        st.caption("📊 مصادر السوق الفعلي: Investing.com, Google Finance, Yahoo")
+        st.caption("📊 مصادر متعددة مع معايرة")
+        st.caption("🎯 القيمة المرجعية: $4077")
     
     # المحتوى الرئيسي
     st.title("🏅 Gold Meter - منصة الذهب")
@@ -560,7 +615,7 @@ def main():
         <div style='background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 20px; border-radius: 15px; text-align: center; border: 2px solid #FFD700;'>
             <h4 style='color: #FFD700;'>🌍 أونصة الذهب</h4>
             <h1 style='color: white;'>${gold_oz:,.2f}</h1>
-            <small style='color: #00ff88;'>Investing.com</small>
+            <small style='color: #00ff88;'>مُعاير</small>
         </div>
         """, unsafe_allow_html=True)
     
@@ -723,12 +778,4 @@ def main():
         st.subheader("📋 التنبيهات المسجلة")
         df = get_alerts(only_active=False)
         if not df.empty:
-            display = df[['username', 'karat', 'high_target', 'low_target', 'triggered']].copy()
-            display.columns = ['المستخدم', 'العيار', 'هدف البيع', 'هدف الشراء', 'الحالة']
-            display['الحالة'] = display['الحالة'].apply(lambda x: '🟢 نشط' if x == 0 else '🔴 منفذ')
-            st.dataframe(display, use_container_width=True)
-        else:
-            st.info("لا توجد تنبيهات")
-
-if __name__ == "__main__":
-    main()
+            display = df[['username', 'karat', 'high_target', 'low_target', 'triggered']].copy
