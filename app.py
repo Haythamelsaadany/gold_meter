@@ -25,7 +25,7 @@ st.set_page_config(
 # إعدادات ثابتة (داخلية)
 # ==========================================
 OUNCE_TO_GRAM = 31.1035
-TAX_RATE = 0.025  # ✅ 2.5% دمغة وضريبة (داخلية - غير معروضة)
+TAX_RATE = 0.0225  # ✅ 2.25% دمغة وضريبة (داخلية - غير معروضة)
 
 # ==========================================
 # 1. نظام تليجرام
@@ -117,10 +117,10 @@ def delete_user_alerts(tg_id):
     conn.close()
 
 # ==========================================
-# 3. جلب الأسعار مع 2.5% دمغة (داخلية)
+# 3. جلب الأسعار مع 2.25% دمغة + مؤشر الخوف
 # ==========================================
 def get_market_data():
-    """جلب الأسعار من مصادر متعددة مع إضافة 2.5% دمغة وضريبة (داخلية)"""
+    """جلب الأسعار من مصادر متعددة مع إضافة 2.25% دمغة وضريبة (داخلية)"""
     
     gold_prices = []
     
@@ -210,14 +210,14 @@ def get_market_data():
     usd_hedge = st.session_state.get('usd_hedge', 0.50)
     usd_egp = round(usd_egp + usd_hedge, 2)
     
-    # ===== حساب أسعار الجرامات مع 2.5% دمغة (داخلية) =====
+    # ===== حساب أسعار الجرامات مع 2.25% دمغة (داخلية) =====
     gram_24_base = (gold_oz * usd_egp) / OUNCE_TO_GRAM
     
     karat_data = {}
     for karat in [24, 22, 21, 18]:
         base_price = gram_24_base * (karat / 24)
         
-        # ✅ إضافة 2.5% دمغة وضريبة (داخلية - غير معروضة)
+        # ✅ إضافة 2.25% دمغة وضريبة (داخلية - غير معروضة)
         price_with_tax = base_price * (1 + TAX_RATE)
         
         spread_rates = {24: 0.0085, 22: 0.0090, 21: 0.0085, 18: 0.0080}
@@ -235,7 +235,108 @@ def get_market_data():
     return karat_data, gold_oz, usd_egp
 
 # ==========================================
-# 4. توصيات بسيطة
+# 4. مؤشر الخوف والطمع (المطور)
+# ==========================================
+def get_fear_greed_index(gold_oz, usd_egp, karat_data):
+    """
+    حساب مؤشر الخوف والطمع في سوق الذهب
+    المقياس من 0 إلى 100
+    """
+    score = 50  # نقطة البداية محايدة
+    
+    # 1. تحليل سعر الذهب (30% من المؤشر)
+    if gold_oz > 2450:
+        score -= 15
+    elif gold_oz > 2400:
+        score -= 8
+    elif gold_oz > 2350:
+        score += 5
+    elif gold_oz > 2300:
+        score += 10
+    else:
+        score += 15
+    
+    # 2. تحليل عيار 21 (25% من المؤشر)
+    price_21 = karat_data.get('21', {}).get('mid', 0)
+    if price_21 > 5900:
+        score -= 12
+    elif price_21 > 5800:
+        score -= 6
+    elif price_21 > 5700:
+        score += 5
+    elif price_21 > 5600:
+        score += 10
+    else:
+        score += 12
+    
+    # 3. تحليل سعر الدولار (20% من المؤشر)
+    if usd_egp > 50.5:
+        score -= 10
+    elif usd_egp > 49.5:
+        score -= 5
+    elif usd_egp > 48.5:
+        score += 5
+    else:
+        score += 10
+    
+    # 4. تحليل التقلبات (Volatility) - 15% من المؤشر
+    try:
+        ticker = yf.Ticker("GC=F")
+        hist = ticker.history(period="5d")
+        if not hist.empty and len(hist) > 1:
+            volatility = hist['Close'].pct_change().std() * 100
+            if volatility > 2:
+                score -= 8
+            elif volatility > 1:
+                score -= 3
+            else:
+                score += 5
+    except:
+        pass
+    
+    # 5. تحليل الاتجاه (10% من المؤشر)
+    try:
+        ticker = yf.Ticker("GC=F")
+        hist = ticker.history(period="10d")
+        if not hist.empty and len(hist) > 5:
+            recent = hist['Close'].iloc[-5:].mean()
+            older = hist['Close'].iloc[:5].mean()
+            if recent > older * 1.01:
+                score += 5
+            elif recent < older * 0.99:
+                score -= 5
+    except:
+        pass
+    
+    # التأكد من الحدود
+    score = max(0, min(100, score))
+    
+    # تصنيف المؤشر
+    if score >= 80:
+        level = "🟢 طمع شديد"
+        description = "السوق في ذروة التفاؤل - كن حذراً"
+        recommendation = "توقع تصحيح - نوصي بتقليل المراكز"
+    elif score >= 60:
+        level = "🟡 طمع"
+        description = "السوق متفائل - توقع تصحيح"
+        recommendation = "خفض نسبة الشراء تدريجياً"
+    elif score >= 40:
+        level = "🟠 محايد"
+        description = "السوق متوازن - انتظر تأكيد"
+        recommendation = "الاحتفاظ بالمراكز الحالية"
+    elif score >= 20:
+        level = "🔴 خوف"
+        description = "السوق خائف - فرصة شراء"
+        recommendation = "زيادة الوزن الشرائي تدريجياً"
+    else:
+        level = "🔴 خوف شديد"
+        description = "السوق في ذروة الخوف - فرصة شراء ممتازة"
+        recommendation = "شراء قوي - استغلال الهبوط"
+    
+    return score, level, description, recommendation
+
+# ==========================================
+# 5. توصيات بسيطة
 # ==========================================
 def get_recommendations(gold_oz, karat_data):
     recommendations = []
@@ -286,7 +387,7 @@ def get_recommendations(gold_oz, karat_data):
     return recommendations, score
 
 # ==========================================
-# 5. الأخبار
+# 6. الأخبار
 # ==========================================
 def fetch_news():
     all_news = []
@@ -313,7 +414,7 @@ def fetch_news():
     return all_news[:10]
 
 # ==========================================
-# 6. الرسم البياني
+# 7. الرسم البياني
 # ==========================================
 @st.cache_data(ttl=300)
 def get_historical_data():
@@ -330,7 +431,7 @@ def get_historical_data():
     return df, True
 
 # ==========================================
-# 7. التنبيهات الخلفية
+# 8. التنبيهات الخلفية
 # ==========================================
 def check_and_send_alerts():
     karat_data, gold_oz, _ = get_market_data()
@@ -392,7 +493,7 @@ def start_background_checker():
         st.session_state.checker_running = True
 
 # ==========================================
-# 8. الواجهة الرئيسية
+# 9. الواجهة الرئيسية
 # ==========================================
 def main():
     init_db()
@@ -403,6 +504,9 @@ def main():
         st.session_state['usd_hedge'] = 0.50
     
     karat_data, gold_oz, usd_egp = get_market_data()
+    
+    # حساب مؤشر الخوف والطمع
+    fear_score, fear_level, fear_desc, fear_rec = get_fear_greed_index(gold_oz, usd_egp, karat_data)
     
     # الشريط الجانبي
     with st.sidebar:
@@ -430,6 +534,12 @@ def main():
             data = karat_data.get(k, {})
             st.metric(f"عيار {k}", f"{data.get('mid', 0):,.2f} ج.م")
         
+        st.divider()
+        st.markdown("### 📊 مؤشر الخوف والطمع")
+        st.metric("المؤشر", f"{fear_score}/100", delta=fear_level)
+        st.caption(fear_desc)
+        st.caption(f"💡 {fear_rec}")
+        
         st.caption(f"👁️ زوار: {views}")
     
     # المحتوى الرئيسي
@@ -446,9 +556,20 @@ def main():
         price_21 = karat_data.get('21', {}).get('mid', 0)
         st.metric("🏅 عيار 21", f"{price_21:,.2f} ج.م")
     with col4:
-        recs, score = get_recommendations(gold_oz, karat_data)
-        color = "🟢" if score >= 10 else "🟡" if score >= 0 else "🔴"
-        st.metric("📊 التوصية", recs[-1] if recs else "محايد")
+        # عرض مؤشر الخوف في البطاقة الرابعة
+        color = "🟢" if fear_score >= 60 else "🟡" if fear_score >= 40 else "🔴"
+        st.metric("📊 مؤشر الخوف", f"{fear_score}/100", delta=f"{color} {fear_level}")
+    
+    st.divider()
+    
+    # مؤشر الخوف والطمع الموسع
+    st.markdown("### 📊 تحليل مؤشر الخوف والطمع")
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        st.metric("القيمة", f"{fear_score}/100", delta=fear_level)
+    with col2:
+        st.info(f"**{fear_desc}**")
+        st.success(f"💡 {fear_rec}")
     
     st.divider()
     
@@ -476,6 +597,7 @@ def main():
     
     with tab2:
         st.subheader("💡 التوصيات")
+        recs, score = get_recommendations(gold_oz, karat_data)
         for rec in recs:
             if "🔴" in rec:
                 st.warning(rec)
