@@ -26,7 +26,7 @@ st.set_page_config(
 # ==========================================
 OUNCE_TO_GRAM = 31.1035
 TAX_RATE = 0.0225  # 2.25% دمغة وضريبة (داخلية)
-GOLD_HEDGE = -5.0  # ✅ 5 دولار خصم من سعر الذهب (لتصحيح السعر)
+GOLD_HEDGE = -5.0  # خصم 5 دولار من سعر الذهب
 
 # ==========================================
 # 1. نظام تليجرام
@@ -118,13 +118,14 @@ def delete_user_alerts(tg_id):
     conn.close()
 
 # ==========================================
-# 3. جلب الأسعار مع خصم الذهب
+# 3. جلب الأسعار مع تحديث لحظي للدولار
 # ==========================================
 def get_market_data():
-    """جلب الأسعار من مصادر متعددة مع خصم من سعر الذهب ودمغة"""
+    """جلب الأسعار من مصادر متعددة مع تحديث لحظي للدولار"""
     
     gold_prices = []
     
+    # ===== سعر الذهب =====
     # Gold-API
     try:
         req = urllib.request.Request("https://api.gold-api.com/price/XAU", headers={'User-Agent': 'Mozilla/5.0'})
@@ -167,18 +168,21 @@ def get_market_data():
     # ✅ خصم 5 دولار من سعر الذهب
     gold_oz = round(gold_oz + GOLD_HEDGE, 2)
     
-    # ===== سعر الدولار =====
+    # ===== سعر الدولار (تحديث لحظي من مصادر متعددة) =====
     usd_rates = []
     
+    # المصدر 1: ExchangeRate-API
     try:
         r = requests.get("https://open.er-api.com/v6/latest/USD", timeout=3)
         if r.status_code == 200:
             rate = float(r.json()['rates']['EGP'])
             if 40 <= rate <= 70:
                 usd_rates.append(rate)
+                print(f"✅ ExchangeRate: {rate:.2f}")
     except:
         pass
     
+    # المصدر 2: Frankfurter
     try:
         r = requests.get("https://api.frankfurter.app/latest?from=USD&to=EGP", timeout=3)
         if r.status_code == 200:
@@ -187,18 +191,39 @@ def get_market_data():
                 rate = float(data['rates']['EGP'])
                 if 40 <= rate <= 70:
                     usd_rates.append(rate)
+                    print(f"✅ Frankfurter: {rate:.2f}")
     except:
         pass
     
+    # المصدر 3: Yahoo Finance (السوق الفعلي)
     try:
         ticker = yf.Ticker("EGP=X")
         rate = float(ticker.fast_info['regularMarketPrice'])
         if 40 <= rate <= 70:
             usd_rates.append(rate)
+            print(f"✅ Yahoo USD: {rate:.2f}")
     except:
         pass
     
-    # حساب متوسط الدولار
+    # المصدر 4: Investing.com (السوق الفعلي)
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
+            'Accept-Language': 'en-US,en;q=0.5',
+        }
+        r = requests.get('https://www.investing.com/currencies/usd-egp', headers=headers, timeout=5)
+        if r.status_code == 200:
+            match = re.search(r'"last":\s*([0-9.]+)', r.text)
+            if match:
+                rate = float(match.group(1))
+                if 40 <= rate <= 70:
+                    usd_rates.append(rate)
+                    print(f"✅ Investing.com: {rate:.2f}")
+    except:
+        pass
+    
+    # حساب متوسط الدولار (بأخذ المتوسط الحسابي)
     if len(usd_rates) >= 3:
         usd_rates_sorted = sorted(usd_rates)
         usd_egp = sum(usd_rates_sorted[1:-1]) / (len(usd_rates_sorted) - 2)
@@ -210,9 +235,11 @@ def get_market_data():
     else:
         usd_egp = 49.50
     
-    # إضافة تحوط اختياري للدولار
-    usd_hedge = st.session_state.get('usd_hedge', 0.50)
-    usd_egp = round(usd_egp + usd_hedge, 2)
+    # ✅ حذف التحوط الثابت للدولار (أصبح يعتمد على المصادر فقط)
+    # نضيف تحوط بسيط جداً 0.05 فقط للتعديل
+    usd_egp = round(usd_egp + 0.05, 2)
+    
+    print(f"🎯 سعر الدولار النهائي: {usd_egp:.2f} ج.م")
     
     # ===== حساب أسعار الجرامات مع 2.25% دمغة =====
     gram_24_base = (gold_oz * usd_egp) / OUNCE_TO_GRAM
@@ -498,9 +525,6 @@ def main():
     start_background_checker()
     views = update_and_get_views()
     
-    if 'usd_hedge' not in st.session_state:
-        st.session_state['usd_hedge'] = 0.50
-    
     karat_data, gold_oz, usd_egp = get_market_data()
     
     # حساب مؤشر الخوف والطمع
@@ -510,21 +534,9 @@ def main():
     with st.sidebar:
         st.title("🏅 Gold Meter")
         
-        st.markdown("### ⚙️ التحكم")
-        usd_hedge = st.slider(
-            "تحوط الدولار",
-            min_value=0.00,
-            max_value=2.00,
-            step=0.05,
-            value=st.session_state['usd_hedge']
-        )
-        if usd_hedge != st.session_state['usd_hedge']:
-            st.session_state['usd_hedge'] = usd_hedge
-            st.rerun()
-        
         st.markdown("### 📊 المؤشرات")
         st.metric("🌍 الذهب", f"${gold_oz:,.2f}")
-        st.metric("💵 الدولار", f"{usd_egp:.2f} ج.م")
+        st.metric("💵 الدولار (لحظي)", f"{usd_egp:.2f} ج.م")
         
         st.divider()
         st.markdown("### 💎 الجرامات")
@@ -539,6 +551,8 @@ def main():
         st.caption(f"💡 {fear_rec}")
         
         st.caption(f"👁️ زوار: {views}")
+        st.caption("⏱️ تحديث لحظي")
+        st.caption("📊 4 مصادر للدولار")
     
     # المحتوى الرئيسي
     st.title("🏅 Gold Meter - منصة الذهب")
@@ -549,7 +563,7 @@ def main():
     with col1:
         st.metric("🌍 أونصة الذهب", f"${gold_oz:,.2f}")
     with col2:
-        st.metric("💵 الدولار", f"{usd_egp:.2f} ج.م")
+        st.metric("💵 الدولار (لحظي)", f"{usd_egp:.2f} ج.م")
     with col3:
         price_21 = karat_data.get('21', {}).get('mid', 0)
         st.metric("🏅 عيار 21", f"{price_21:,.2f} ج.م")
