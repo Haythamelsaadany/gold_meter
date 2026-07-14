@@ -26,8 +26,9 @@ st.set_page_config(
 # ==========================================
 OUNCE_TO_GRAM = 31.1035
 TAX_RATE = 0.0225  # 2.25% دمغة وضريبة
+GRAM_TO_MITHQAL = 4.25  # 1 جنيه ذهب = 8 جرام
 
-# القيم المرجعية من السوق الفعلي (للتحقق)
+# القيم المرجعية من السوق الفعلي
 REFERENCE_GOLD = 4077.0
 REFERENCE_USD = 50.72
 
@@ -236,9 +237,7 @@ def get_market_data():
     
     # حساب متوسط الذهب
     if len(gold_prices) >= 2:
-        # نأخذ المتوسط مع إعطاء وزن أكبر لـ Investing.com
         if gold_investing is not None and len(gold_prices) >= 2:
-            # نحسب المتوسط المرجح: 60% Investing, 40% باقي المصادر
             other_avg = sum([p for p in gold_prices if p != gold_investing]) / (len(gold_prices) - 1)
             gold_price = round((gold_investing * 0.6 + other_avg * 0.4), 2)
         else:
@@ -246,7 +245,7 @@ def get_market_data():
     elif len(gold_prices) == 1:
         gold_price = gold_prices[0]
     else:
-        gold_price = REFERENCE_GOLD  # استخدام القيمة المرجعية
+        gold_price = REFERENCE_GOLD
     
     # ===== جلب سعر الدولار من مصادر متعددة =====
     usd_prices = []
@@ -263,7 +262,6 @@ def get_market_data():
     if usd_yahoo is not None:
         usd_prices.append(usd_yahoo)
     
-    # حساب متوسط الدولار
     if len(usd_prices) >= 2:
         usd_price = round(sum(usd_prices) / len(usd_prices), 2)
     elif len(usd_prices) == 1:
@@ -271,10 +269,8 @@ def get_market_data():
     else:
         usd_price = REFERENCE_USD
     
-    # ===== معايرة الذهب بناءً على القيمة المرجعية =====
-    # إذا كان الفرق كبير (> 5 دولار)، نصحح السعر
+    # ===== معايرة الذهب =====
     if abs(gold_price - REFERENCE_GOLD) > 5:
-        # نأخذ متوسط بين السعر المجلوب والمرجعي
         gold_price = round((gold_price + REFERENCE_GOLD) / 2, 2)
         print(f"🔧 تمت المعايرة: {gold_price}")
     
@@ -300,7 +296,19 @@ def get_market_data():
             'mid': round(price_with_tax, 2)
         }
     
-    return karat_data, gold_price, usd_price
+    # ===== حساب سعر الجنيه الذهب =====
+    # 1 جنيه ذهب = 8 جرام من عيار 21
+    gold_pound_base = karat_data['21']['mid'] * 8
+    gold_pound_buy = karat_data['21']['buy'] * 8
+    gold_pound_sell = karat_data['21']['sell'] * 8
+    
+    pound_data = {
+        'buy': round(gold_pound_buy, 2),
+        'sell': round(gold_pound_sell, 2),
+        'mid': round(gold_pound_base, 2)
+    }
+    
+    return karat_data, gold_price, usd_price, pound_data
 
 # ==========================================
 # 4. مؤشر الخوف والطمع
@@ -491,7 +499,7 @@ def get_historical_data():
 # 8. التنبيهات الخلفية
 # ==========================================
 def check_and_send_alerts():
-    karat_data, gold_oz, _ = get_market_data()
+    karat_data, gold_oz, _, _ = get_market_data()
     today = datetime.now().strftime('%Y-%m-%d')
     df = get_alerts(only_active=True)
     if df.empty:
@@ -565,7 +573,7 @@ def main():
         st.session_state.last_refresh = time.time()
         st.rerun()
     
-    karat_data, gold_oz, usd_egp = get_market_data()
+    karat_data, gold_oz, usd_egp, pound_data = get_market_data()
     
     fear_score, fear_level, fear_desc, fear_rec = get_fear_greed_index(gold_oz, usd_egp, karat_data)
     
@@ -583,6 +591,11 @@ def main():
         for k in ['24', '22', '21', '18']:
             data = karat_data.get(k, {})
             st.metric(f"عيار {k}", f"{data.get('mid', 0):,.2f} ج.م")
+        
+        st.divider()
+        st.markdown("### 🪙 الجنيه الذهب")
+        st.metric("شراء", f"{pound_data['buy']:,.2f} ج.م")
+        st.metric("بيع", f"{pound_data['sell']:,.2f} ج.م")
         
         st.divider()
         st.markdown("### 📊 مؤشر الخوف والطمع")
@@ -607,7 +620,7 @@ def main():
     st.title("🏅 Gold Meter - منصة الذهب")
     st.info(f"🔄 آخر تحديث: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (تلقائي كل 3 ثواني)")
     
-    # بطاقات الأسعار
+    # بطاقات الأسعار الرئيسية
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -650,6 +663,19 @@ def main():
     
     st.divider()
     
+    # ===== جنيه الذهب =====
+    st.markdown("### 🪙 سعر الجنيه الذهب")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("🟢 سعر الشراء", f"{pound_data['buy']:,.2f} ج.م")
+    with col2:
+        st.metric("🔴 سعر البيع", f"{pound_data['sell']:,.2f} ج.م")
+    with col3:
+        st.metric("📊 المتوسط", f"{pound_data['mid']:,.2f} ج.م")
+    st.caption("💰 1 جنيه ذهب = 8 جرام من عيار 21")
+    
+    st.divider()
+    
     # مؤشر الخوف والطمع الموسع
     st.markdown("### 📊 تحليل مؤشر الخوف والطمع")
     col1, col2 = st.columns([1, 2])
@@ -661,8 +687,8 @@ def main():
     
     st.divider()
     
-    # أسعار الشراء والبيع
-    st.markdown("### 💰 أسعار الشراء والبيع")
+    # ===== أسعار الشراء والبيع =====
+    st.markdown("### 💰 أسعار الشراء والبيع (الجرامات)")
     cols = st.columns(4)
     for i, k in enumerate(['24', '22', '21', '18']):
         data = karat_data.get(k, {})
@@ -686,7 +712,7 @@ def main():
     
     st.divider()
     
-    # التبويبات
+    # ===== التبويبات =====
     tab1, tab2, tab3, tab4 = st.tabs(["📊 التحليل", "💡 التوصيات", "📰 الأخبار", "🔔 التنبيهات"])
     
     with tab1:
@@ -778,4 +804,12 @@ def main():
         st.subheader("📋 التنبيهات المسجلة")
         df = get_alerts(only_active=False)
         if not df.empty:
-            display = df[['username', 'karat', 'high_target', 'low_target', 'triggered']].copy
+            display = df[['username', 'karat', 'high_target', 'low_target', 'triggered']].copy()
+            display.columns = ['المستخدم', 'العيار', 'هدف البيع', 'هدف الشراء', 'الحالة']
+            display['الحالة'] = display['الحالة'].apply(lambda x: '🟢 نشط' if x == 0 else '🔴 منفذ')
+            st.dataframe(display, use_container_width=True)
+        else:
+            st.info("لا توجد تنبيهات")
+
+if __name__ == "__main__":
+    main()
