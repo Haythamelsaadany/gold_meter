@@ -117,7 +117,7 @@ def delete_user_alerts(tg_id):
     conn.close()
 
 # ==========================================
-# 3. جلب الأسعار من مصادر السوق الفعلي
+# 3. جلب الأسعار (سعر دولار من Yahoo فقط)
 # ==========================================
 def fetch_gold_price():
     """جلب سعر الذهب من 3 مصادر"""
@@ -166,61 +166,31 @@ def fetch_gold_price():
     return None
 
 def fetch_usd_price():
-    """جلب سعر الدولار من مصادر السوق الفعلي"""
-    rates = []
-    
-    # المصدر 1: Yahoo Finance (EGP=X) - سعر السوق الفعلي
+    """جلب سعر الدولار من Yahoo Finance فقط (السوق الفعلي)"""
     try:
         ticker = yf.Ticker("EGP=X")
         rate = float(ticker.fast_info['regularMarketPrice'])
+        # التحقق من منطقية السعر
         if 40 <= rate <= 70:
-            rates.append(rate)
             print(f"✅ Yahoo Finance (السوق الفعلي): {rate:.2f}")
+            return rate
+        else:
+            print(f"⚠️ سعر غير منطقي: {rate}")
+            return None
     except Exception as e:
         print(f"⚠️ Yahoo Finance فشل: {e}")
-    
-    # المصدر 2: Investing.com (سعر السوق الفعلي)
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
-        }
-        r = requests.get('https://www.investing.com/currencies/usd-egp', headers=headers, timeout=5)
-        if r.status_code == 200:
-            # البحث عن السعر في الصفحة
-            match = re.search(r'"last":\s*([0-9.]+)', r.text)
-            if match:
-                rate = float(match.group(1))
-                if 40 <= rate <= 70:
-                    rates.append(rate)
-                    print(f"✅ Investing.com (السوق الفعلي): {rate:.2f}")
-    except Exception as e:
-        print(f"⚠️ Investing.com فشل: {e}")
-    
-    # المصدر 3: ExchangeRate-API (سعر البنك المركزي - احتياطي)
-    try:
-        r = requests.get("https://open.er-api.com/v6/latest/USD", timeout=5)
-        if r.status_code == 200:
-            rate = float(r.json()['rates']['EGP'])
-            if 40 <= rate <= 70:
-                rates.append(rate)
-                print(f"✅ ExchangeRate (البنك المركزي): {rate:.2f}")
-    except Exception as e:
-        print(f"⚠️ ExchangeRate فشل: {e}")
-    
-    if rates:
-        # نأخذ المتوسط مع إعطاء وزن أكبر لمصادر السوق الفعلي
-        # بترتيب الأولوية: Yahoo > Investing > ExchangeRate
-        return round(sum(rates) / len(rates), 2)
-    
-    print("⚠️ جميع مصادر الدولار فشلت")
-    return None
+        return None
 
 @st.cache_data(ttl=10)
 def get_market_data():
     """جلب الأسعار وحساب الجرامات"""
     gold = fetch_gold_price()
     usd = fetch_usd_price()
+    
+    # إذا فشل Yahoo، نحاول مرة أخرى بعد 5 ثواني
+    if usd is None:
+        time.sleep(5)
+        usd = fetch_usd_price()
     
     if gold is None or usd is None:
         return None, None, None
@@ -487,7 +457,7 @@ def main():
         st.divider()
         st.caption(f"👁️ زوار اليوم: {views}")
         st.caption("⏱️ تحديث كل 10 ثواني")
-        st.caption("📊 السعر من: Yahoo Finance, Investing.com")
+        st.caption("📊 مصدر الدولار: Yahoo Finance")
     
     # المحتوى الرئيسي
     st.title("🏅 Gold Meter Pro - منصة الذهب المتكاملة")
@@ -518,7 +488,7 @@ def main():
         <div style='background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 20px; border-radius: 15px; text-align: center; border: 2px solid #00d4ff;'>
             <h4 style='color: #00d4ff;'>💵 الدولار</h4>
             <h1 style='color: white;'>{usd:.2f} ج.م</h1>
-            <small style='color: #ffd93d;'>السوق الفعلي</small>
+            <small style='color: #ffd93d;'>السوق الفعلي (Yahoo)</small>
         </div>
         """, unsafe_allow_html=True)
     
@@ -698,18 +668,6 @@ def main():
             1. ابحث عن `@userinfobot` في تليجرام
             2. اضغط **Start**
             3. سيرسل لك البوت رقم الـ ID الخاص بك
-            """)
-        with st.expander("📖 مصادر الأسعار"):
-            st.markdown("""
-            **سعر الذهب:**
-            - Gold-API
-            - YFinance (GC=F)
-            - Metals-API
-            
-            **سعر الدولار (السوق الفعلي):**
-            - Yahoo Finance (EGP=X)
-            - Investing.com
-            - ExchangeRate-API (احتياطي)
             """)
 
 if __name__ == "__main__":
