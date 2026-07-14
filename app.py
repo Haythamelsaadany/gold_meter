@@ -1,25 +1,19 @@
 import streamlit as st
-import sqlite3
-import pandas as pd
 import yfinance as yf
-import feedparser
-import requests
-import re
-import time
-import json
-import urllib.request
-import threading
-from datetime import datetime, timedelta
+import pandas as pd
 import plotly.graph_objects as go
+import requests
+import json
+import time
+from datetime import datetime, timedelta
 
 # ==========================================
 # إعدادات الصفحة
 # ==========================================
 st.set_page_config(
-    page_title="🏅 Gold Meter Pro - منصة الذهب المتكاملة",
+    page_title="Gold Meter Pro",
     layout="wide",
-    page_icon="🏅",
-    initial_sidebar_state="expanded"
+    page_icon="🏅"
 )
 
 # ==========================================
@@ -29,138 +23,35 @@ OUNCE_TO_GRAM = 31.1035
 TAX_RATE = 0.019  # 1.9% دمغة
 
 # ==========================================
-# 1. نظام تليجرام
+# دالة جلب الأسعار (من yfinance فقط)
 # ==========================================
-def send_telegram_message(chat_id, text):
-    try:
-        token = "8813434919:AAHytB4BlyZ_NgwSvprzpEXBrNUXhLPdGYk"
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
-        payload = {"chat_id": str(chat_id).strip(), "text": text, "parse_mode": "Markdown"}
-        response = requests.post(url, json=payload, timeout=10)
-        return response.status_code == 200, "✅ تم الإرسال"
-    except Exception as e:
-        return False, f"❌ خطأ: {str(e)}"
-
-# ==========================================
-# 2. قاعدة البيانات
-# ==========================================
-def init_db():
-    conn = sqlite3.connect('gold_data.db')
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS gold_alerts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT,
-        tg_id TEXT,
-        karat TEXT,
-        high_target REAL,
-        low_target REAL,
-        triggered INTEGER DEFAULT 0,
-        last_alerted_date TEXT
-    )''')
-    c.execute('''CREATE TABLE IF NOT EXISTS site_stats (
-        id INTEGER PRIMARY KEY,
-        views INTEGER
-    )''')
-    c.execute("INSERT OR IGNORE INTO site_stats (id, views) VALUES (1, 0)")
-    conn.commit()
-    conn.close()
-
-def update_and_get_views():
-    conn = sqlite3.connect('gold_data.db')
-    c = conn.cursor()
-    if 'tracked' not in st.session_state:
-        st.session_state['tracked'] = True
-        c.execute("UPDATE site_stats SET views = views + 1 WHERE id = 1")
-        conn.commit()
-    c.execute("SELECT views FROM site_stats WHERE id = 1")
-    views = c.fetchone()[0]
-    conn.close()
-    return views
-
-def save_alert(username, tg_id, karat, high, low):
-    conn = sqlite3.connect('gold_data.db')
-    c = conn.cursor()
-    try:
-        c.execute("""
-            INSERT INTO gold_alerts (username, tg_id, karat, high_target, low_target, triggered)
-            VALUES (?, ?, ?, ?, ?, 0)
-        """, (username, tg_id, karat, float(high), float(low)))
-        conn.commit()
-        return True, "✅ تم الحفظ"
-    except Exception as e:
-        return False, f"❌ خطأ: {e}"
-    finally:
-        conn.close()
-
-def get_alerts(only_active=True):
-    conn = sqlite3.connect('gold_data.db')
-    query = "SELECT id, username, tg_id, karat, high_target, low_target, triggered, last_alerted_date FROM gold_alerts"
-    if only_active:
-        query += " WHERE triggered = 0"
-    query += " ORDER BY id DESC"
-    df = pd.read_sql_query(query, conn)
-    conn.close()
-    return df
-
-def update_alert_triggered(alert_id):
-    conn = sqlite3.connect('gold_data.db')
-    c = conn.cursor()
-    today = datetime.now().strftime('%Y-%m-%d')
-    c.execute("UPDATE gold_alerts SET triggered = 1, last_alerted_date = ? WHERE id = ?", (today, alert_id))
-    conn.commit()
-    conn.close()
-
-def delete_user_alerts(tg_id):
-    conn = sqlite3.connect('gold_data.db')
-    c = conn.cursor()
-    c.execute("DELETE FROM gold_alerts WHERE tg_id = ?", (tg_id,))
-    conn.commit()
-    conn.close()
-
-# ==========================================
-# 3. جلب الأسعار (YFinance فقط - مضمون)
-# ==========================================
-def fetch_prices():
-    """جلب الأسعار من YFinance فقط (الأكثر استقراراً)"""
+@st.cache_data(ttl=10)
+def get_live_prices():
+    """جلب الأسعار من yfinance"""
     try:
         # سعر الذهب
         gold_ticker = yf.Ticker("GC=F")
         gold = float(gold_ticker.fast_info['last_price'])
         print(f"✅ الذهب: ${gold:.2f}")
     except Exception as e:
-        print(f"⚠️ فشل جلب الذهب: {e}")
+        print(f"❌ خطأ في الذهب: {e}")
         gold = None
     
     try:
         # سعر الدولار
         usd_ticker = yf.Ticker("EGP=X")
         usd = float(usd_ticker.fast_info['regularMarketPrice'])
-        print(f"✅ الدولار: {usd:.2f} ج.م")
+        print(f"✅ الدولار: {usd:.2f}")
     except Exception as e:
-        print(f"⚠️ فشل جلب الدولار: {e}")
+        print(f"❌ خطأ في الدولار: {e}")
         usd = None
     
     return gold, usd
 
-@st.cache_data(ttl=10)
-def get_market_data():
-    """جلب الأسعار مع إعادة محاولة تلقائية"""
-    max_retries = 5
-    for attempt in range(max_retries):
-        gold, usd = fetch_prices()
-        
-        if gold is not None and usd is not None:
-            # التحقق من منطقية الأسعار
-            if 2300 < gold < 5000 and 40 < usd < 70:
-                break
-        else:
-            print(f"⚠️ محاولة {attempt + 1}/{max_retries} فشلت، إعادة المحاولة...")
-            time.sleep(2)
-    
-    if gold is None or usd is None:
-        return None, None, None
-    
-    # حساب الجرامات مع 1.9% دمغة
+# ==========================================
+# دالة حساب الجرامات
+# ==========================================
+def calculate_prices(gold, usd):
     gram24 = (gold * usd) / OUNCE_TO_GRAM
     karat_data = {}
     for k in [24, 22, 21, 18]:
@@ -171,16 +62,12 @@ def get_market_data():
             'sell': round(base * (1 + spread/2), 2),
             'mid': round(base, 2)
         }
-    
-    return karat_data, gold, usd
+    return karat_data
 
 # ==========================================
-# 4. التحليل والتوصيات
+# دالة مؤشر الخوف والطمع
 # ==========================================
 def get_fear_greed(gold, usd, karat_data):
-    if gold is None or usd is None or karat_data is None:
-        return "⚠️", "جاري التحميل..."
-    
     score = 50
     if gold > 2450:
         score -= 15
@@ -229,10 +116,10 @@ def get_fear_greed(gold, usd, karat_data):
     
     return score, status
 
+# ==========================================
+# دالة التوصيات
+# ==========================================
 def get_recommendations(gold, usd, karat_data):
-    if gold is None or usd is None or karat_data is None:
-        return ["⚠️ جاري تحميل البيانات..."], 0
-    
     recs = []
     score = 0
     
@@ -281,37 +168,10 @@ def get_recommendations(gold, usd, karat_data):
     return recs, score
 
 # ==========================================
-# 5. الأخبار
-# ==========================================
-def fetch_news():
-    all_news = []
-    feeds = [
-        ("https://news.google.com/rss/search?q=%D8%A7%D9%84%D8%B0%D9%87%D8%A8&hl=ar&gl=EG&ceid=EG:ar", "Google News"),
-        ("https://feeds.feedburner.com/egyptgold", "مصر للذهب"),
-        ("https://www.cnbcarabia.com/rss", "CNBC عربية"),
-    ]
-    
-    for url, source in feeds:
-        try:
-            feed = feedparser.parse(url)
-            if feed.entries:
-                for entry in feed.entries[:3]:
-                    all_news.append({
-                        'title': entry.title,
-                        'link': entry.link,
-                        'source': source,
-                        'published': entry.get('published', 'تاريخ غير معروف')
-                    })
-        except:
-            continue
-    
-    return all_news[:10]
-
-# ==========================================
-# 6. الرسم البياني
+# جلب بيانات الرسم البياني
 # ==========================================
 @st.cache_data(ttl=300)
-def get_historical_data():
+def get_chart_data():
     try:
         ticker = yf.Ticker("GC=F")
         hist = ticker.history(period="1mo")
@@ -319,322 +179,84 @@ def get_historical_data():
             return hist, False
     except:
         pass
+    # بيانات احتياطية
     dates = [datetime.now() - timedelta(days=i) for i in range(30)][::-1]
     prices = [2350 + i*1.5 for i in range(30)]
     df = pd.DataFrame({"Close": prices}, index=dates)
     return df, True
 
 # ==========================================
-# 7. التنبيهات الخلفية
-# ==========================================
-def check_and_send_alerts():
-    karat_data, gold, usd = get_market_data()
-    if karat_data is None:
-        return "⚠️ لا يمكن جلب الأسعار"
-    
-    today = datetime.now().strftime('%Y-%m-%d')
-    df = get_alerts(only_active=True)
-    if df.empty:
-        return "ℹ️ لا توجد تنبيهات نشطة"
-    
-    msgs = []
-    for _, row in df.iterrows():
-        alert_id = row['id']
-        username = row['username']
-        tg_id = row['tg_id']
-        karat = row['karat']
-        high = float(row['high_target'])
-        low = float(row['low_target'])
-        last_alerted = row.get('last_alerted_date')
-        
-        current = karat_data.get(karat, {}).get('mid', 0)
-        
-        if current >= high and last_alerted != today:
-            alert_text = f"""🚀 *تنبيه صعود الذهب!*
-👤 المستخدم: {username}
-💎 العيار: {karat}
-💰 السعر الحالي: {current:,.2f} ج.م
-🎯 هدف البيع: {high:,.0f} ج.م"""
-            success, _ = send_telegram_message(tg_id, alert_text)
-            if success:
-                update_alert_triggered(alert_id)
-                msgs.append(f"✅ تنبيه لـ {username}")
-        elif current <= low and last_alerted != today:
-            alert_text = f"""📉 *تنبيه هبوط الذهب!*
-👤 المستخدم: {username}
-💎 العيار: {karat}
-💰 السعر الحالي: {current:,.2f} ج.م
-🎯 هدف الشراء: {low:,.0f} ج.م"""
-            success, _ = send_telegram_message(tg_id, alert_text)
-            if success:
-                update_alert_triggered(alert_id)
-                msgs.append(f"✅ تنبيه لـ {username}")
-    
-    return "\n".join(msgs) if msgs else "ℹ️ لا توجد تنبيهات جديدة"
-
-def start_background_checker():
-    if "checker_running" not in st.session_state:
-        st.session_state.checker_running = False
-    
-    if not st.session_state.checker_running:
-        def checker_loop():
-            while True:
-                try:
-                    check_and_send_alerts()
-                except:
-                    pass
-                time.sleep(30)
-        
-        thread = threading.Thread(target=checker_loop, daemon=True)
-        thread.start()
-        st.session_state.checker_running = True
-
-# ==========================================
-# 8. الواجهة الرئيسية
+# الواجهة الرئيسية
 # ==========================================
 def main():
-    init_db()
-    start_background_checker()
-    views = update_and_get_views()
-    
-    # جلب البيانات مع رسالة تحميل
-    with st.spinner("⏳ جاري تحميل الأسعار من البورصة العالمية..."):
-        karat_data, gold, usd = get_market_data()
-    
-    # الشريط الجانبي
-    with st.sidebar:
-        st.image("https://img.icons8.com/color/96/000000/gold-bars.png", width=80)
-        st.title("🏅 Gold Meter Pro")
-        
-        if gold is not None and usd is not None:
-            st.markdown("### 📊 المؤشرات")
-            st.metric("🌍 أونصة الذهب", f"${gold:,.2f}")
-            st.metric("💵 الدولار (السوق الفعلي)", f"{usd:.2f} ج.م")
-            st.metric("📊 الدمغة", f"{TAX_RATE*100:.1f}%")
-            
-            st.divider()
-            st.markdown("### 💎 الجرامات")
-            for k in ['24', '22', '21', '18']:
-                data = karat_data.get(k, {})
-                mid = data.get('mid', 0)
-                st.metric(f"عيار {k}", f"{mid:,.2f} ج.م")
-        else:
-            st.warning("⚠️ جاري تحميل الأسعار...")
-            st.info("💡 سيتم التحميل تلقائياً خلال ثوانٍ")
-        
-        st.divider()
-        st.caption(f"👁️ زوار اليوم: {views}")
-        st.caption("⏱️ تحديث كل 10 ثواني")
-        st.caption("📊 مصدر البيانات: YFinance")
-    
-    # المحتوى الرئيسي
     st.title("🏅 Gold Meter Pro - منصة الذهب المتكاملة")
     
+    # جلب الأسعار
+    with st.spinner("⏳ جاري تحميل الأسعار من البورصة..."):
+        gold, usd = get_live_prices()
+    
     if gold is None or usd is None:
-        st.error("⚠️ لا يمكن جلب الأسعار حالياً")
-        st.info("💡 يتم استخدام مصدر YFinance فقط لضمان الاستقرار")
-        
-        # زر إعادة المحاولة
-        if st.button("🔄 إعادة محاولة جلب الأسعار"):
+        st.error("❌ فشل جلب الأسعار. تأكد من اتصال الإنترنت.")
+        if st.button("🔄 إعادة المحاولة"):
             st.cache_data.clear()
             st.rerun()
         return
     
-    st.markdown(f"🔄 **آخر تحديث:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    st.info(f"💰 **تم إضافة {TAX_RATE*100:.1f}% دمغة** على جميع الأسعار")
-    
-    # مؤشر الخوف والطمع
+    # حساب البيانات
+    karat_data = calculate_prices(gold, usd)
     fear_score, fear_status = get_fear_greed(gold, usd, karat_data)
+    recs, score = get_recommendations(gold, usd, karat_data)
+    
+    # عرض آخر تحديث
+    st.caption(f"🔄 آخر تحديث: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    st.info(f"💰 تم إضافة {TAX_RATE*100:.1f}% دمغة على جميع الأسعار")
     
     # بطاقات الأسعار
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.markdown(f"""
-        <div style='background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 20px; border-radius: 15px; text-align: center; border: 2px solid #FFD700;'>
-            <h4 style='color: #FFD700;'>🌍 أونصة الذهب</h4>
-            <h1 style='color: white;'>${gold:,.2f}</h1>
-            <small style='color: #00ff88;'>تحديث لحظي</small>
-        </div>
-        """, unsafe_allow_html=True)
+        st.metric("🌍 أونصة الذهب", f"${gold:,.2f}", delta="تحديث لحظي")
     
     with col2:
-        st.markdown(f"""
-        <div style='background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 20px; border-radius: 15px; text-align: center; border: 2px solid #00d4ff;'>
-            <h4 style='color: #00d4ff;'>💵 الدولار</h4>
-            <h1 style='color: white;'>{usd:.2f} ج.م</h1>
-            <small style='color: #ffd93d;'>السوق الفعلي (Yahoo)</small>
-        </div>
-        """, unsafe_allow_html=True)
+        st.metric("💵 الدولار (السوق الفعلي)", f"{usd:.2f} ج.م")
     
     with col3:
         price_21 = karat_data.get('21', {}).get('mid', 0)
-        st.markdown(f"""
-        <div style='background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 20px; border-radius: 15px; text-align: center; border: 2px solid #ff6b6b;'>
-            <h4 style='color: #ff6b6b;'>🏅 عيار 21</h4>
-            <h1 style='color: white;'>{price_21:,.2f} ج.م</h1>
-            <small style='color: #888;'>شامل {TAX_RATE*100:.1f}% دمغة</small>
-        </div>
-        """, unsafe_allow_html=True)
+        st.metric("🏅 عيار 21", f"{price_21:,.2f} ج.م")
     
     with col4:
-        color = "#00ff88" if fear_score >= 60 else "#ffd93d" if fear_score >= 40 else "#ff6b6b"
-        st.markdown(f"""
-        <div style='background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 20px; border-radius: 15px; text-align: center; border: 2px solid {color};'>
-            <h4 style='color: {color};'>📊 مؤشر الخوف والطمع</h4>
-            <h1 style='color: white;'>{fear_score}</h1>
-            <small style='color: #888;'>{fear_status}</small>
-        </div>
-        """, unsafe_allow_html=True)
+        st.metric("📊 مؤشر الخوف", f"{fear_score}", delta=fear_status)
     
     st.divider()
     
-    # ===== أسعار الشراء والبيع =====
-    st.markdown(f"### 💰 أسعار الشراء والبيع (شاملة {TAX_RATE*100:.1f}% دمغة)")
-    
+    # أسعار الشراء والبيع
+    st.subheader("💰 أسعار الشراء والبيع")
     cols = st.columns(4)
     for i, k in enumerate(['24', '22', '21', '18']):
         data = karat_data.get(k, {})
-        buy = data.get('buy', 0)
-        sell = data.get('sell', 0)
-        spread = round(sell - buy, 2)
-        
         with cols[i]:
             st.markdown(f"""
-            <div style='background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 15px; border-radius: 12px; text-align: center; border: 1px solid #333;'>
-                <h3 style='color: #ffd93d;'>عيار {k}</h3>
-                <div style='display: flex; justify-content: space-around;'>
-                    <div>
-                        <small style='color: #aaa;'>شراء</small>
-                        <h4 style='color: #00ff88;'>{buy:,.2f}</h4>
-                    </div>
-                    <div>
-                        <small style='color: #aaa;'>بيع</small>
-                        <h4 style='color: #ff6b6b;'>{sell:,.2f}</h4>
-                    </div>
-                </div>
-                <small style='color: #888;'>الفرق: {spread:.2f} ج.م</small>
-            </div>
-            """, unsafe_allow_html=True)
+            **عيار {k}**
+            - شراء: {data.get('buy', 0):,.2f} ج.م
+            - بيع: {data.get('sell', 0):,.2f} ج.م
+            """)
     
     st.divider()
     
-    # ===== التبويبات =====
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "📊 التحليل", 
-        "💡 التوصيات", 
-        "📰 الأخبار", 
-        "🔔 التنبيهات",
-        "⚙️ الإدارة"
-    ])
-    
-    with tab1:
-        st.subheader("📈 أداء الذهب - آخر 30 يوم")
-        hist_data, _ = get_historical_data()
-        st.line_chart(hist_data['Close'])
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("📈 أعلى سعر", f"${hist_data['Close'].max():.2f}")
-        with col2:
-            st.metric("📉 أدنى سعر", f"${hist_data['Close'].min():.2f}")
-        with col3:
-            change = ((hist_data['Close'].iloc[-1] - hist_data['Close'].iloc[-2]) / hist_data['Close'].iloc[-2]) * 100 if len(hist_data) > 1 else 0
-            st.metric("📊 التغير اليومي", f"{change:+.2f}%")
-    
-    with tab2:
-        st.subheader("💡 التوصيات الذكية")
-        recs, score = get_recommendations(gold, usd, karat_data)
-        for rec in recs:
-            if "🔴" in rec or "📉" in rec:
-                st.warning(rec)
-            elif "🟢" in rec or "📈" in rec or "🌟" in rec:
-                st.success(rec)
-            else:
-                st.info(rec)
-        
-        st.divider()
-        st.markdown("### 🎯 استراتيجية التداول")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.markdown(f"""
-            **🛡️ مناطق الدعم**
-            - دعم أول: ${gold - 50:.0f}
-            - دعم ثاني: ${gold - 100:.0f}
-            """)
-        with col2:
-            st.markdown(f"""
-            **🚀 مناطق المقاومة**
-            - مقاومة أولى: ${gold + 50:.0f}
-            - مقاومة ثانية: ${gold + 100:.0f}
-            """)
-        with col3:
-            st.markdown("""
-            **⚖️ نسب التخصيص**
-            - شراء: 30-40%
-            - احتفاظ: 40-50%
-            - بيع: 10-20%
-            """)
-    
-    with tab3:
-        st.subheader("📰 آخر أخبار الذهب والدولار")
-        news = fetch_news()
-        if news:
-            for item in news:
-                st.markdown(f"🔹 **[{item['title']}]({item['link']})**")
-                st.caption(f"📰 {item['source']} | 📅 {item['published']}")
-                st.divider()
+    # التوصيات
+    st.subheader("💡 التوصيات الذكية")
+    for rec in recs:
+        if "🔴" in rec:
+            st.warning(rec)
+        elif "🟢" in rec or "🌟" in rec:
+            st.success(rec)
         else:
-            st.info("📰 جاري تحميل الأخبار...")
+            st.info(rec)
     
-    with tab4:
-        st.subheader("🔔 التنبيهات")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            username = st.text_input("👤 الاسم")
-            tg_id = st.text_input("🆔 Chat ID")
-        with col2:
-            karat = st.selectbox("💎 العيار", ["24", "22", "21", "18"])
-            current_mid = karat_data.get(karat, {}).get('mid', 0)
-            high = st.number_input("🚀 هدف البيع", value=float(round(current_mid + 150)), step=50.0)
-            low = st.number_input("🔻 هدف الشراء", value=float(round(current_mid - 150)), step=50.0)
-        
-        if st.button("💾 حفظ التنبيه", type="primary"):
-            if username and tg_id:
-                ok, msg = save_alert(username, tg_id, karat, high, low)
-                if ok:
-                    st.balloons()
-                    st.success("✅ تم الحفظ")
-                    st.rerun()
-                else:
-                    st.error(msg)
-            else:
-                st.error("❌ أدخل الاسم و Chat ID")
-        
-        st.divider()
-        st.subheader("📋 التنبيهات المسجلة")
-        df = get_alerts(only_active=False)
-        if not df.empty:
-            display = df[['username', 'karat', 'high_target', 'low_target', 'triggered']].copy()
-            display.columns = ['المستخدم', 'العيار', 'هدف البيع', 'هدف الشراء', 'الحالة']
-            display['الحالة'] = display['الحالة'].apply(lambda x: '🟢 نشط' if x == 0 else '🔴 منفذ')
-            st.dataframe(display, use_container_width=True)
-        else:
-            st.info("لا توجد تنبيهات")
-    
-    with tab5:
-        st.subheader("⚙️ الإدارة والإحصائيات")
-        
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("👁️ زوار اليوم", views)
-        with col2:
-            df_all = get_alerts(only_active=False)
-            st.metric("📋 التنبيهات", len(df_all) if not df_all.empty else 0)
-        with col3:
-            active = len(df_all[df_all['triggered']==0]) if not df_all.empty else 0
-            st.metric("🟢 النشطة", active)
+    # الرسم البياني
+    st.subheader("📈 أداء الذهب - آخر 30 يوم")
+    chart_data, fallback = get_chart_data()
+    st.line_chart(chart_data['Close'])
 
 if __name__ == "__main__":
     main()
