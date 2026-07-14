@@ -25,6 +25,7 @@ st.set_page_config(
 # إعدادات ثابتة
 # ==========================================
 OUNCE_TO_GRAM = 31.1035
+TAX_RATE = 0.002  # ✅ 0.2% دمغة وضريبة (0.002)
 
 # ==========================================
 # 1. نظام تليجرام
@@ -116,10 +117,10 @@ def delete_user_alerts(tg_id):
     conn.close()
 
 # ==========================================
-# 3. جلب الأسعار
+# 3. جلب الأسعار مع إضافة 0.2% دمغة
 # ==========================================
 def get_market_data():
-    """جلب الأسعار من مصادر متعددة"""
+    """جلب الأسعار من مصادر متعددة مع إضافة 0.2% دمغة وضريبة"""
     
     gold_prices = []
     
@@ -209,22 +210,26 @@ def get_market_data():
     usd_hedge = st.session_state.get('usd_hedge', 0.50)
     usd_egp = round(usd_egp + usd_hedge, 2)
     
-    # ===== حساب أسعار الجرامات =====
+    # ===== حساب أسعار الجرامات مع 0.2% دمغة =====
     gram_24_base = (gold_oz * usd_egp) / OUNCE_TO_GRAM
     
     karat_data = {}
     for karat in [24, 22, 21, 18]:
         base_price = gram_24_base * (karat / 24)
+        
+        # ✅ إضافة 0.2% دمغة وضريبة
+        price_with_tax = base_price * (1 + TAX_RATE)
+        
         spread_rates = {24: 0.0085, 22: 0.0090, 21: 0.0085, 18: 0.0080}
         spread = spread_rates.get(karat, 0.0085)
         
-        buy_price = base_price * (1 - spread/2)
-        sell_price = base_price * (1 + spread/2)
+        buy_price = price_with_tax * (1 - spread/2)
+        sell_price = price_with_tax * (1 + spread/2)
         
         karat_data[str(karat)] = {
             'buy': round(buy_price, 2),
             'sell': round(sell_price, 2),
-            'mid': round(base_price, 2)
+            'mid': round(price_with_tax, 2)
         }
     
     return karat_data, gold_oz, usd_egp
@@ -418,6 +423,7 @@ def main():
         st.markdown("### 📊 المؤشرات")
         st.metric("🌍 الذهب", f"${gold_oz:,.2f}")
         st.metric("💵 الدولار", f"{usd_egp:.2f} ج.م")
+        st.metric("📊 الدمغة", f"{TAX_RATE*100:.1f}%")
         
         st.divider()
         st.markdown("### 💎 الجرامات")
@@ -429,6 +435,7 @@ def main():
     
     # المحتوى الرئيسي
     st.title("🏅 Gold Meter - منصة الذهب")
+    st.info(f"💰 تم إضافة {TAX_RATE*100:.1f}% دمغة وضريبة على جميع الأسعار")
     
     # بطاقات الأسعار
     col1, col2, col3, col4 = st.columns(4)
@@ -448,7 +455,7 @@ def main():
     st.divider()
     
     # أسعار الشراء والبيع
-    st.markdown("### 💰 أسعار الشراء والبيع")
+    st.markdown("### 💰 أسعار الشراء والبيع (شاملة الدمغة)")
     cols = st.columns(4)
     for i, k in enumerate(['24', '22', '21', '18']):
         data = karat_data.get(k, {})
