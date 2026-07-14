@@ -26,7 +26,7 @@ st.set_page_config(
 # إعدادات ثابتة
 # ==========================================
 OUNCE_TO_GRAM = 31.1035
-TAX_RATE = 0.019  # ✅ 1.9% دمغة
+TAX_RATE = 0.019  # 1.9% دمغة
 
 # ==========================================
 # 1. نظام تليجرام
@@ -118,89 +118,44 @@ def delete_user_alerts(tg_id):
     conn.close()
 
 # ==========================================
-# 3. جلب الأسعار (محسّن)
+# 3. جلب الأسعار (YFinance فقط - مضمون)
 # ==========================================
-def fetch_gold_price():
-    """جلب سعر الذهب من 3 مصادر"""
-    prices = []
-    
-    # المصدر 1: Gold-API
+def fetch_prices():
+    """جلب الأسعار من YFinance فقط (الأكثر استقراراً)"""
     try:
-        req = urllib.request.Request("https://api.gold-api.com/price/XAU", headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=8) as r:
-            data = json.loads(r.read().decode('utf-8'))
-            if data and 'price' in data:
-                prices.append(float(data['price']))
-                print(f"✅ Gold-API: ${float(data['price']):.2f}")
+        # سعر الذهب
+        gold_ticker = yf.Ticker("GC=F")
+        gold = float(gold_ticker.fast_info['last_price'])
+        print(f"✅ الذهب: ${gold:.2f}")
     except Exception as e:
-        print(f"⚠️ Gold-API فشل: {e}")
+        print(f"⚠️ فشل جلب الذهب: {e}")
+        gold = None
     
-    # المصدر 2: YFinance (GC=F)
     try:
-        ticker = yf.Ticker("GC=F")
-        price = float(ticker.fast_info['last_price'])
-        prices.append(price)
-        print(f"✅ YFinance: ${price:.2f}")
+        # سعر الدولار
+        usd_ticker = yf.Ticker("EGP=X")
+        usd = float(usd_ticker.fast_info['regularMarketPrice'])
+        print(f"✅ الدولار: {usd:.2f} ج.م")
     except Exception as e:
-        print(f"⚠️ YFinance فشل: {e}")
+        print(f"⚠️ فشل جلب الدولار: {e}")
+        usd = None
     
-    # المصدر 3: Metals-API
-    try:
-        r = requests.get("https://api.metals.live/v1/spot/gold", timeout=8)
-        if r.status_code == 200:
-            data = r.json()
-            if data and len(data) > 0 and 'price' in data[0]:
-                price = float(data[0]['price'])
-                prices.append(price)
-                print(f"✅ Metals-API: ${price:.2f}")
-    except Exception as e:
-        print(f"⚠️ Metals-API فشل: {e}")
-    
-    if prices:
-        if len(prices) >= 3:
-            prices_sorted = sorted(prices)
-            return round(sum(prices_sorted[1:-1]) / (len(prices_sorted) - 2), 2)
-        else:
-            return round(sum(prices) / len(prices), 2)
-    
-    print("⚠️ جميع مصادر الذهب فشلت")
-    return None
+    return gold, usd
 
-def fetch_usd_price():
-    """جلب سعر الدولار من Yahoo Finance (السوق الفعلي)"""
-    try:
-        ticker = yf.Ticker("EGP=X")
-        rate = float(ticker.fast_info['regularMarketPrice'])
-        if 40 <= rate <= 70:
-            print(f"✅ Yahoo Finance: {rate:.2f}")
-            return rate
-    except Exception as e:
-        print(f"⚠️ Yahoo Finance فشل: {e}")
-    
-    # محاولة بديلة من Investing.com
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
-        }
-        r = requests.get('https://www.investing.com/currencies/usd-egp', headers=headers, timeout=8)
-        if r.status_code == 200:
-            match = re.search(r'"last":\s*([0-9.]+)', r.text)
-            if match:
-                rate = float(match.group(1))
-                if 40 <= rate <= 70:
-                    print(f"✅ Investing.com: {rate:.2f}")
-                    return rate
-    except Exception as e:
-        print(f"⚠️ Investing.com فشل: {e}")
-    
-    return None
-
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=10)
 def get_market_data():
-    """جلب الأسعار وحساب الجرامات مع دمغة 1.9%"""
-    gold = fetch_gold_price()
-    usd = fetch_usd_price()
+    """جلب الأسعار مع إعادة محاولة تلقائية"""
+    max_retries = 5
+    for attempt in range(max_retries):
+        gold, usd = fetch_prices()
+        
+        if gold is not None and usd is not None:
+            # التحقق من منطقية الأسعار
+            if 2300 < gold < 5000 and 40 < usd < 70:
+                break
+        else:
+            print(f"⚠️ محاولة {attempt + 1}/{max_retries} فشلت، إعادة المحاولة...")
+            time.sleep(2)
     
     if gold is None or usd is None:
         return None, None, None
@@ -209,7 +164,7 @@ def get_market_data():
     gram24 = (gold * usd) / OUNCE_TO_GRAM
     karat_data = {}
     for k in [24, 22, 21, 18]:
-        base = gram24 * (k / 24) * (1 + TAX_RATE)  # ✅ 1.9% دمغة
+        base = gram24 * (k / 24) * (1 + TAX_RATE)
         spread = {24: 0.0085, 22: 0.0090, 21: 0.0085, 18: 0.0080}.get(k, 0.0085)
         karat_data[str(k)] = {
             'buy': round(base * (1 - spread/2), 2),
@@ -442,8 +397,9 @@ def main():
     start_background_checker()
     views = update_and_get_views()
     
-    # جلب البيانات
-    karat_data, gold, usd = get_market_data()
+    # جلب البيانات مع رسالة تحميل
+    with st.spinner("⏳ جاري تحميل الأسعار من البورصة العالمية..."):
+        karat_data, gold, usd = get_market_data()
     
     # الشريط الجانبي
     with st.sidebar:
@@ -464,19 +420,19 @@ def main():
                 st.metric(f"عيار {k}", f"{mid:,.2f} ج.م")
         else:
             st.warning("⚠️ جاري تحميل الأسعار...")
-            st.info("💡 تأكد من اتصال الإنترنت")
+            st.info("💡 سيتم التحميل تلقائياً خلال ثوانٍ")
         
         st.divider()
         st.caption(f"👁️ زوار اليوم: {views}")
-        st.caption("⏱️ تحديث كل 15 ثانية")
-        st.caption("📊 مصدر الدولار: Yahoo Finance")
+        st.caption("⏱️ تحديث كل 10 ثواني")
+        st.caption("📊 مصدر البيانات: YFinance")
     
     # المحتوى الرئيسي
     st.title("🏅 Gold Meter Pro - منصة الذهب المتكاملة")
     
     if gold is None or usd is None:
-        st.error("⚠️ لا يمكن جلب الأسعار. تأكد من اتصال الإنترنت.")
-        st.info("💡 يتم استخدام مصادر: Gold-API, YFinance, Metals-API للذهب و Yahoo Finance للدولار")
+        st.error("⚠️ لا يمكن جلب الأسعار حالياً")
+        st.info("💡 يتم استخدام مصدر YFinance فقط لضمان الاستقرار")
         
         # زر إعادة المحاولة
         if st.button("🔄 إعادة محاولة جلب الأسعار"):
@@ -679,15 +635,6 @@ def main():
         with col3:
             active = len(df_all[df_all['triggered']==0]) if not df_all.empty else 0
             st.metric("🟢 النشطة", active)
-        
-        st.divider()
-        st.markdown("### 📖 دليل المستخدم")
-        with st.expander("📖 كيف تحصل على Chat ID؟"):
-            st.markdown("""
-            1. ابحث عن `@userinfobot` في تليجرام
-            2. اضغط **Start**
-            3. سيرسل لك البوت رقم الـ ID الخاص بك
-            """)
 
 if __name__ == "__main__":
     main()
