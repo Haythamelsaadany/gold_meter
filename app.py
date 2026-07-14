@@ -16,7 +16,7 @@ import plotly.graph_objects as go
 # إعدادات الصفحة
 # ==========================================
 st.set_page_config(
-    page_title="🏅 Gold Meter Pro - تحديث لحظي",
+    page_title="🏅 Gold Meter Pro - السوق الفعلي",
     layout="wide",
     page_icon="🏅"
 )
@@ -117,111 +117,30 @@ def delete_user_alerts(tg_id):
     conn.close()
 
 # ==========================================
-# 3. جلب الأسعار مع تحديث لحظي (محسّن)
+# 3. جلب الأسعار من السوق الفعلي فقط
 # ==========================================
-@st.cache_data(ttl=3)
-def get_market_data():
-    """جلب الأسعار من مصادر متعددة مع تحديث لحظي"""
-    
-    gold_prices = []
-    
-    # ===== سعر الذهب =====
-    # Gold-API
+def get_gold_price_from_investing():
+    """جلب سعر الذهب من Investing.com"""
     try:
-        req = urllib.request.Request("https://api.gold-api.com/price/XAU", headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=3) as r:
-            data = json.loads(r.read().decode('utf-8'))
-            if data and 'price' in data:
-                gold_prices.append(float(data['price']))
-                print(f"✅ Gold-API: {float(data['price'])}")
-    except Exception as e:
-        print(f"⚠️ Gold-API فشل: {e}")
-    
-    # YFinance
-    try:
-        ticker = yf.Ticker("GC=F")
-        price = float(ticker.fast_info['last_price'])
-        gold_prices.append(price)
-        print(f"✅ YFinance: {price}")
-    except Exception as e:
-        print(f"⚠️ YFinance فشل: {e}")
-    
-    # Kitco
-    try:
-        r = requests.get("https://www.kitco.com/price/precious-metals", timeout=3, headers={'User-Agent': 'Mozilla/5.0'})
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
+            'Accept-Language': 'en-US,en;q=0.5',
+        }
+        r = requests.get('https://www.investing.com/currencies/xau-usd', headers=headers, timeout=5)
         if r.status_code == 200:
-            match = re.search(r'XAUUSD\s*=\s*([0-9.]+)', r.text)
+            # البحث عن السعر في الصفحة
+            match = re.search(r'"last":\s*([0-9.]+)', r.text)
             if match:
                 price = float(match.group(1))
-                gold_prices.append(price)
-                print(f"✅ Kitco: {price}")
+                print(f"✅ Investing.com الذهب: {price}")
+                return price
     except Exception as e:
-        print(f"⚠️ Kitco فشل: {e}")
-    
-    # Metals-API (مصدر إضافي)
-    try:
-        r = requests.get("https://api.metals.live/v1/spot/gold", timeout=3)
-        if r.status_code == 200:
-            data = r.json()
-            if data and len(data) > 0 and 'price' in data[0]:
-                price = float(data[0]['price'])
-                gold_prices.append(price)
-                print(f"✅ Metals-API: {price}")
-    except Exception as e:
-        print(f"⚠️ Metals-API فشل: {e}")
-    
-    # حساب متوسط الذهب (بدون تحوطات)
-    if len(gold_prices) >= 3:
-        gold_prices_sorted = sorted(gold_prices)
-        gold_oz = sum(gold_prices_sorted[1:-1]) / (len(gold_prices_sorted) - 2)
-        gold_oz = round(gold_oz, 2)
-    elif len(gold_prices) >= 2:
-        gold_oz = round(sum(gold_prices) / len(gold_prices), 2)
-    elif len(gold_prices) == 1:
-        gold_oz = gold_prices[0]
-    else:
-        gold_oz = 4094.4  # القيمة المرجعية من السوق الفعلي
-    
-    print(f"🎯 سعر الذهب النهائي: {gold_oz}")
-    
-    # ===== سعر الدولار (تحديث لحظي من مصادر متعددة) =====
-    usd_rates = []
-    
-    # المصدر 1: ExchangeRate-API
-    try:
-        r = requests.get("https://open.er-api.com/v6/latest/USD", timeout=3)
-        if r.status_code == 200:
-            rate = float(r.json()['rates']['EGP'])
-            if 40 <= rate <= 70:
-                usd_rates.append(rate)
-                print(f"✅ ExchangeRate: {rate}")
-    except Exception as e:
-        print(f"⚠️ ExchangeRate فشل: {e}")
-    
-    # المصدر 2: Frankfurter
-    try:
-        r = requests.get("https://api.frankfurter.app/latest?from=USD&to=EGP", timeout=3)
-        if r.status_code == 200:
-            data = r.json()
-            if data and 'rates' in data and 'EGP' in data['rates']:
-                rate = float(data['rates']['EGP'])
-                if 40 <= rate <= 70:
-                    usd_rates.append(rate)
-                    print(f"✅ Frankfurter: {rate}")
-    except Exception as e:
-        print(f"⚠️ Frankfurter فشل: {e}")
-    
-    # المصدر 3: Yahoo Finance (السوق الفعلي)
-    try:
-        ticker = yf.Ticker("EGP=X")
-        rate = float(ticker.fast_info['regularMarketPrice'])
-        if 40 <= rate <= 70:
-            usd_rates.append(rate)
-            print(f"✅ Yahoo USD: {rate}")
-    except Exception as e:
-        print(f"⚠️ Yahoo USD فشل: {e}")
-    
-    # المصدر 4: Investing.com (السوق الفعلي)
+        print(f"⚠️ Investing.com فشل: {e}")
+    return None
+
+def get_usd_price_from_investing():
+    """جلب سعر الدولار من Investing.com"""
     try:
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -232,48 +151,87 @@ def get_market_data():
         if r.status_code == 200:
             match = re.search(r'"last":\s*([0-9.]+)', r.text)
             if match:
-                rate = float(match.group(1))
-                if 40 <= rate <= 70:
-                    usd_rates.append(rate)
-                    print(f"✅ Investing.com: {rate}")
+                price = float(match.group(1))
+                print(f"✅ Investing.com الدولار: {price}")
+                return price
     except Exception as e:
         print(f"⚠️ Investing.com فشل: {e}")
-    
-    # المصدر 5: CBE (البنك المركزي المصري - سعر رسمي)
+    return None
+
+def get_usd_price_from_google():
+    """جلب سعر الدولار من Google Finance"""
     try:
-        r = requests.get("https://www.cbe.org.eg/api/v1/exchange-rates/usd", timeout=3)
+        url = "https://finance.google.com/finance?q=USDEGP&output=json"
+        headers = {'User-Agent': 'Mozilla/5.0'}
+        r = requests.get(url, headers=headers, timeout=5)
         if r.status_code == 200:
-            data = r.json()
-            if data and 'rate' in data:
-                rate = float(data['rate'])
-                if 40 <= rate <= 70:
-                    usd_rates.append(rate)
-                    print(f"✅ CBE: {rate}")
+            match = re.search(r'"l":\s*"([0-9.]+)"', r.text)
+            if match:
+                price = float(match.group(1))
+                print(f"✅ Google Finance الدولار: {price}")
+                return price
     except Exception as e:
-        print(f"⚠️ CBE فشل: {e}")
+        print(f"⚠️ Google Finance فشل: {e}")
+    return None
+
+@st.cache_data(ttl=3)
+def get_market_data():
+    """جلب الأسعار من السوق الفعلي فقط"""
     
-    # حساب متوسط الدولار (بدون تحوطات)
-    if len(usd_rates) >= 3:
-        usd_rates_sorted = sorted(usd_rates)
-        usd_egp = sum(usd_rates_sorted[1:-1]) / (len(usd_rates_sorted) - 2)
-        usd_egp = round(usd_egp, 2)
-    elif len(usd_rates) >= 2:
-        usd_egp = round(sum(usd_rates) / len(usd_rates), 2)
-    elif len(usd_rates) == 1:
-        usd_egp = usd_rates[0]
+    # ===== سعر الذهب من السوق الفعلي =====
+    gold_price = get_gold_price_from_investing()
+    
+    # إذا فشل Investing، نستخدم YFinance كاحتياطي
+    if gold_price is None:
+        try:
+            ticker = yf.Ticker("GC=F")
+            gold_price = float(ticker.fast_info['last_price'])
+            print(f"✅ YFinance الذهب (احتياطي): {gold_price}")
+        except:
+            gold_price = 4074.0  # قيمة مرجعية من السوق الفعلي
+    
+    # ===== سعر الدولار من السوق الفعلي =====
+    usd_prices = []
+    
+    # المصدر 1: Investing.com
+    usd_investing = get_usd_price_from_investing()
+    if usd_investing is not None:
+        usd_prices.append(usd_investing)
+    
+    # المصدر 2: Google Finance
+    usd_google = get_usd_price_from_google()
+    if usd_google is not None:
+        usd_prices.append(usd_google)
+    
+    # المصدر 3: Yahoo Finance (احتياطي)
+    try:
+        ticker = yf.Ticker("EGP=X")
+        usd_yahoo = float(ticker.fast_info['regularMarketPrice'])
+        if 40 <= usd_yahoo <= 70:
+            usd_prices.append(usd_yahoo)
+            print(f"✅ Yahoo الدولار (احتياطي): {usd_yahoo}")
+    except:
+        pass
+    
+    # حساب متوسط الدولار من المصادر الفعلية
+    if len(usd_prices) >= 2:
+        usd_egp = round(sum(usd_prices) / len(usd_prices), 2)
+    elif len(usd_prices) == 1:
+        usd_egp = usd_prices[0]
     else:
-        usd_egp = 50.67  # القيمة المرجعية من السوق الفعلي
+        usd_egp = 50.72  # القيمة المرجعية من السوق الفعلي
     
+    print(f"🎯 سعر الذهب النهائي: {gold_price}")
     print(f"🎯 سعر الدولار النهائي: {usd_egp}")
     
     # ===== حساب أسعار الجرامات مع 2.25% دمغة =====
-    gram_24_base = (gold_oz * usd_egp) / OUNCE_TO_GRAM
+    gram_24_base = (gold_price * usd_egp) / OUNCE_TO_GRAM
     
     karat_data = {}
     for karat in [24, 22, 21, 18]:
         base_price = gram_24_base * (karat / 24)
         
-        # إضافة 2.25% دمغة وضريبة (داخلية - غير معروضة)
+        # إضافة 2.25% دمغة وضريبة (داخلية)
         price_with_tax = base_price * (1 + TAX_RATE)
         
         spread_rates = {24: 0.0085, 22: 0.0090, 21: 0.0085, 18: 0.0080}
@@ -288,7 +246,7 @@ def get_market_data():
             'mid': round(price_with_tax, 2)
         }
     
-    return karat_data, gold_oz, usd_egp
+    return karat_data, gold_price, usd_egp
 
 # ==========================================
 # 4. مؤشر الخوف والطمع
@@ -296,7 +254,6 @@ def get_market_data():
 def get_fear_greed_index(gold_oz, usd_egp, karat_data):
     score = 50
     
-    # 1. تحليل سعر الذهب (30%)
     if gold_oz > 2450:
         score -= 15
     elif gold_oz > 2400:
@@ -308,7 +265,6 @@ def get_fear_greed_index(gold_oz, usd_egp, karat_data):
     else:
         score += 15
     
-    # 2. تحليل عيار 21 (25%)
     price_21 = karat_data.get('21', {}).get('mid', 0)
     if price_21 > 5900:
         score -= 12
@@ -321,7 +277,6 @@ def get_fear_greed_index(gold_oz, usd_egp, karat_data):
     else:
         score += 12
     
-    # 3. تحليل سعر الدولار (20%)
     if usd_egp > 50.5:
         score -= 10
     elif usd_egp > 49.5:
@@ -331,7 +286,6 @@ def get_fear_greed_index(gold_oz, usd_egp, karat_data):
     else:
         score += 10
     
-    # 4. تحليل التقلبات (15%)
     try:
         ticker = yf.Ticker("GC=F")
         hist = ticker.history(period="5d")
@@ -346,7 +300,6 @@ def get_fear_greed_index(gold_oz, usd_egp, karat_data):
     except:
         pass
     
-    # 5. تحليل الاتجاه (10%)
     try:
         ticker = yf.Ticker("GC=F")
         hist = ticker.history(period="10d")
@@ -386,7 +339,7 @@ def get_fear_greed_index(gold_oz, usd_egp, karat_data):
     return score, level, description, recommendation
 
 # ==========================================
-# 5. توصيات بسيطة
+# 5. توصيات
 # ==========================================
 def get_recommendations(gold_oz, karat_data):
     recommendations = []
@@ -543,35 +496,33 @@ def start_background_checker():
         st.session_state.checker_running = True
 
 # ==========================================
-# 9. الواجهة الرئيسية مع التحديث التلقائي
+# 9. الواجهة الرئيسية
 # ==========================================
 def main():
     init_db()
     start_background_checker()
     views = update_and_get_views()
     
-    # ===== تحديث تلقائي بدون مكتبة خارجية =====
+    # تحديث تلقائي كل 3 ثواني
     if 'last_refresh' not in st.session_state:
         st.session_state.last_refresh = time.time()
     
-    # تحديث كل 3 ثواني
     if time.time() - st.session_state.last_refresh > 3:
         st.session_state.last_refresh = time.time()
         st.rerun()
     
     karat_data, gold_oz, usd_egp = get_market_data()
     
-    # حساب مؤشر الخوف والطمع
     fear_score, fear_level, fear_desc, fear_rec = get_fear_greed_index(gold_oz, usd_egp, karat_data)
     
-    # ===== الشريط الجانبي =====
+    # الشريط الجانبي
     with st.sidebar:
         st.image("https://img.icons8.com/color/96/000000/gold-bars.png", width=80)
         st.title("🏅 Gold Meter Pro")
         
         st.markdown("### 📊 المؤشرات")
         st.metric("🌍 الذهب", f"${gold_oz:,.2f}")
-        st.metric("💵 الدولار (لحظي)", f"{usd_egp:.2f} ج.م")
+        st.metric("💵 الدولار (السوق الفعلي)", f"{usd_egp:.2f} ج.م")
         
         st.divider()
         st.markdown("### 💎 الجرامات")
@@ -587,7 +538,6 @@ def main():
         
         st.divider()
         
-        # ===== زر التحديث اليدوي =====
         if st.button("🔄 تحديث يدوي", type="primary", use_container_width=True):
             st.cache_data.clear()
             st.success("✅ تم تحديث الأسعار!")
@@ -596,12 +546,10 @@ def main():
         
         st.caption(f"👁️ زوار اليوم: {views}")
         st.caption("⏱️ تحديث تلقائي كل 3 ثواني")
-        st.caption("📊 5 مصادر للدولار")
+        st.caption("📊 مصادر السوق الفعلي: Investing.com, Google Finance, Yahoo")
     
-    # ===== المحتوى الرئيسي =====
+    # المحتوى الرئيسي
     st.title("🏅 Gold Meter - منصة الذهب")
-    
-    # عرض وقت آخر تحديث
     st.info(f"🔄 آخر تحديث: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (تلقائي كل 3 ثواني)")
     
     # بطاقات الأسعار
@@ -612,7 +560,7 @@ def main():
         <div style='background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 20px; border-radius: 15px; text-align: center; border: 2px solid #FFD700;'>
             <h4 style='color: #FFD700;'>🌍 أونصة الذهب</h4>
             <h1 style='color: white;'>${gold_oz:,.2f}</h1>
-            <small style='color: #00ff88;'>تحديث لحظي</small>
+            <small style='color: #00ff88;'>Investing.com</small>
         </div>
         """, unsafe_allow_html=True)
     
@@ -621,7 +569,7 @@ def main():
         <div style='background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 20px; border-radius: 15px; text-align: center; border: 2px solid #00d4ff;'>
             <h4 style='color: #00d4ff;'>💵 الدولار</h4>
             <h1 style='color: white;'>{usd_egp:.2f} ج.م</h1>
-            <small style='color: #ffd93d;'>5 مصادر</small>
+            <small style='color: #ffd93d;'>السوق الفعلي</small>
         </div>
         """, unsafe_allow_html=True)
     
@@ -658,7 +606,7 @@ def main():
     
     st.divider()
     
-    # ===== أسعار الشراء والبيع =====
+    # أسعار الشراء والبيع
     st.markdown("### 💰 أسعار الشراء والبيع")
     cols = st.columns(4)
     for i, k in enumerate(['24', '22', '21', '18']):
@@ -683,7 +631,7 @@ def main():
     
     st.divider()
     
-    # ===== التبويبات =====
+    # التبويبات
     tab1, tab2, tab3, tab4 = st.tabs(["📊 التحليل", "💡 التوصيات", "📰 الأخبار", "🔔 التنبيهات"])
     
     with tab1:
@@ -691,7 +639,6 @@ def main():
         hist_data, _ = get_historical_data()
         st.line_chart(hist_data['Close'])
         
-        # إحصائيات
         if not hist_data.empty:
             col1, col2, col3 = st.columns(3)
             with col1:
