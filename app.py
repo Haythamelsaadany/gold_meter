@@ -217,7 +217,7 @@ def get_market_data():
     for karat in [24, 22, 21, 18]:
         base_price = gram_24_base * (karat / 24)
         
-        # ✅ إضافة 0.2% دمغة وضريبة
+        # ✅ إضافة 0.3% دمغة وضريبة
         price_with_tax = base_price * (1 + TAX_RATE)
         
         spread_rates = {24: 0.0085, 22: 0.0090, 21: 0.0085, 18: 0.0080}
