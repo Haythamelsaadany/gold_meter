@@ -26,6 +26,7 @@ st.set_page_config(
 # إعدادات ثابتة
 # ==========================================
 OUNCE_TO_GRAM = 31.1035
+TAX_RATE = 0.019  # ✅ 1.9% دمغة
 
 # ==========================================
 # 1. نظام تليجرام
@@ -117,7 +118,7 @@ def delete_user_alerts(tg_id):
     conn.close()
 
 # ==========================================
-# 3. جلب الأسعار (سعر دولار من Yahoo فقط)
+# 3. جلب الأسعار (محسّن)
 # ==========================================
 def fetch_gold_price():
     """جلب سعر الذهب من 3 مصادر"""
@@ -126,7 +127,7 @@ def fetch_gold_price():
     # المصدر 1: Gold-API
     try:
         req = urllib.request.Request("https://api.gold-api.com/price/XAU", headers={'User-Agent': 'Mozilla/5.0'})
-        with urllib.request.urlopen(req, timeout=5) as r:
+        with urllib.request.urlopen(req, timeout=8) as r:
             data = json.loads(r.read().decode('utf-8'))
             if data and 'price' in data:
                 prices.append(float(data['price']))
@@ -145,7 +146,7 @@ def fetch_gold_price():
     
     # المصدر 3: Metals-API
     try:
-        r = requests.get("https://api.metals.live/v1/spot/gold", timeout=5)
+        r = requests.get("https://api.metals.live/v1/spot/gold", timeout=8)
         if r.status_code == 200:
             data = r.json()
             if data and len(data) > 0 and 'price' in data[0]:
@@ -166,40 +167,49 @@ def fetch_gold_price():
     return None
 
 def fetch_usd_price():
-    """جلب سعر الدولار من Yahoo Finance فقط (السوق الفعلي)"""
+    """جلب سعر الدولار من Yahoo Finance (السوق الفعلي)"""
     try:
         ticker = yf.Ticker("EGP=X")
         rate = float(ticker.fast_info['regularMarketPrice'])
-        # التحقق من منطقية السعر
         if 40 <= rate <= 70:
-            print(f"✅ Yahoo Finance (السوق الفعلي): {rate:.2f}")
+            print(f"✅ Yahoo Finance: {rate:.2f}")
             return rate
-        else:
-            print(f"⚠️ سعر غير منطقي: {rate}")
-            return None
     except Exception as e:
         print(f"⚠️ Yahoo Finance فشل: {e}")
-        return None
+    
+    # محاولة بديلة من Investing.com
+    try:
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9',
+        }
+        r = requests.get('https://www.investing.com/currencies/usd-egp', headers=headers, timeout=8)
+        if r.status_code == 200:
+            match = re.search(r'"last":\s*([0-9.]+)', r.text)
+            if match:
+                rate = float(match.group(1))
+                if 40 <= rate <= 70:
+                    print(f"✅ Investing.com: {rate:.2f}")
+                    return rate
+    except Exception as e:
+        print(f"⚠️ Investing.com فشل: {e}")
+    
+    return None
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=15)
 def get_market_data():
-    """جلب الأسعار وحساب الجرامات"""
+    """جلب الأسعار وحساب الجرامات مع دمغة 1.9%"""
     gold = fetch_gold_price()
     usd = fetch_usd_price()
-    
-    # إذا فشل Yahoo، نحاول مرة أخرى بعد 5 ثواني
-    if usd is None:
-        time.sleep(5)
-        usd = fetch_usd_price()
     
     if gold is None or usd is None:
         return None, None, None
     
-    # حساب الجرامات مع 2% دمغة
+    # حساب الجرامات مع 1.9% دمغة
     gram24 = (gold * usd) / OUNCE_TO_GRAM
     karat_data = {}
     for k in [24, 22, 21, 18]:
-        base = gram24 * (k / 24) * 1.02  # 2% دمغة
+        base = gram24 * (k / 24) * (1 + TAX_RATE)  # ✅ 1.9% دمغة
         spread = {24: 0.0085, 22: 0.0090, 21: 0.0085, 18: 0.0080}.get(k, 0.0085)
         karat_data[str(k)] = {
             'buy': round(base * (1 - spread/2), 2),
@@ -444,6 +454,7 @@ def main():
             st.markdown("### 📊 المؤشرات")
             st.metric("🌍 أونصة الذهب", f"${gold:,.2f}")
             st.metric("💵 الدولار (السوق الفعلي)", f"{usd:.2f} ج.م")
+            st.metric("📊 الدمغة", f"{TAX_RATE*100:.1f}%")
             
             st.divider()
             st.markdown("### 💎 الجرامات")
@@ -453,10 +464,11 @@ def main():
                 st.metric(f"عيار {k}", f"{mid:,.2f} ج.م")
         else:
             st.warning("⚠️ جاري تحميل الأسعار...")
+            st.info("💡 تأكد من اتصال الإنترنت")
         
         st.divider()
         st.caption(f"👁️ زوار اليوم: {views}")
-        st.caption("⏱️ تحديث كل 10 ثواني")
+        st.caption("⏱️ تحديث كل 15 ثانية")
         st.caption("📊 مصدر الدولار: Yahoo Finance")
     
     # المحتوى الرئيسي
@@ -464,9 +476,16 @@ def main():
     
     if gold is None or usd is None:
         st.error("⚠️ لا يمكن جلب الأسعار. تأكد من اتصال الإنترنت.")
+        st.info("💡 يتم استخدام مصادر: Gold-API, YFinance, Metals-API للذهب و Yahoo Finance للدولار")
+        
+        # زر إعادة المحاولة
+        if st.button("🔄 إعادة محاولة جلب الأسعار"):
+            st.cache_data.clear()
+            st.rerun()
         return
     
     st.markdown(f"🔄 **آخر تحديث:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    st.info(f"💰 **تم إضافة {TAX_RATE*100:.1f}% دمغة** على جميع الأسعار")
     
     # مؤشر الخوف والطمع
     fear_score, fear_status = get_fear_greed(gold, usd, karat_data)
@@ -498,7 +517,7 @@ def main():
         <div style='background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 20px; border-radius: 15px; text-align: center; border: 2px solid #ff6b6b;'>
             <h4 style='color: #ff6b6b;'>🏅 عيار 21</h4>
             <h1 style='color: white;'>{price_21:,.2f} ج.م</h1>
-            <small style='color: #888;'>شامل الدمغة</small>
+            <small style='color: #888;'>شامل {TAX_RATE*100:.1f}% دمغة</small>
         </div>
         """, unsafe_allow_html=True)
     
@@ -515,7 +534,7 @@ def main():
     st.divider()
     
     # ===== أسعار الشراء والبيع =====
-    st.markdown("### 💰 أسعار الشراء والبيع (شاملة الدمغة)")
+    st.markdown(f"### 💰 أسعار الشراء والبيع (شاملة {TAX_RATE*100:.1f}% دمغة)")
     
     cols = st.columns(4)
     for i, k in enumerate(['24', '22', '21', '18']):
